@@ -1,739 +1,602 @@
 import streamlit as st
-import pdfplumber
+from openai import OpenAI
 import pandas as pd
-import re
-import matplotlib.pyplot as plt
+import pdfplumber
+import io
+import requests
 from datetime import datetime
 
 # =========================================================
 # CONFIG GLOBALE
 # =========================================================
 
-APP_NAME = "IA agricole – marges & conseils"
-APP_VERSION = "1.0.0"  # augmente ce numéro quand tu modifies le code
+APP_NAME = "🌾 Conseiller agricole IA"
+APP_VERSION = "3.0.0"
 
-st.set_page_config(page_title=APP_NAME, layout="wide")
+st.set_page_config(page_title=APP_NAME, page_icon="🌾", layout="wide")
+
+# Le client OpenAI (clé dans OPENAI_API_KEY ou st.secrets["OPENAI_API_KEY"])
+client = OpenAI()
 
 
 # =========================================================
-# FONCTIONS UTILITAIRES
+# SYSTEM PROMPT – CERVEAU DE L’IA
 # =========================================================
 
-def _to_float_fr(s, default=None):
-    """Convertit '41,70' ou '41 70' en float 41.70."""
-    if s is None:
-        return default
-    s = s.replace("\xa0", " ")
-    s = s.replace(" ", "")
-    s = s.replace(",", ".")
+SYSTEM_PROMPT = """
+Tu es un super conseiller agricole IA francophone, dédié à aider les agriculteurs, éleveurs et porteurs de projet.
+Tu as le niveau de réflexion d’un technicien/ingénieur agricole et la rigueur d’un bon expert-comptable,
+tout en restant humain, clair et accessible.
+
+🎯 Ta mission générale
+- Aider sur toutes les productions agricoles possibles :
+  grandes cultures, polyculture-élevage, bovin lait, bovin viande, ovin, caprin, porc, volaille,
+  maraîchage, arboriculture, viticulture, systèmes herbagers, agroforesterie, cultures spéciales, etc.
+- Couvrir les aspects :
+  - techniques (agronomie, élevage, machinisme, bâtiments, irrigation, prairies…),
+  - économiques (marges, EBE, résultats, investissements),
+  - comptables de base,
+  - organisationnels (travail, saison, main-d’œuvre),
+  - stratégiques (choix de systèmes, évolutions de la ferme).
+- Aider l’agriculteur à gagner du temps sur les papiers, l’organisation et les décisions.
+
+🧠 Niveau technique & calculs (agri + compta)
+Tu es capable :
+- D’expliquer et de calculer, quand l’utilisateur donne des chiffres :
+  - marges brutes, marges nettes,
+  - EBE (Excédent Brut d’Exploitation),
+  - résultat courant, résultat net,
+  - CAF (Capacité d’Autofinancement) simple,
+  - BFR (Besoin en Fonds de Roulement) de base,
+  - seuil de rentabilité / point mort (en valeur et en volume),
+  - poids des charges de structure, charges de mécanisation, annuités / EBE,
+  - indicateurs par ha, par UTH, par tête (€/ha, €/VL, €/brebis, €/place, etc.).
+- Tu détailles toujours les formules de façon pédagogique, par exemple :
+  - “Marge brute = Produit – Charges opérationnelles directes”
+  - “EBE = Produit d’exploitation – Charges opérationnelles – Charges de structure (hors amortissements)”.
+- Tu réorganises les infos numériques dans des tableaux logiques avant de conclure (même approximatifs).
+- S’il manque des données essentielles, tu poses 2–3 questions ciblées avant de proposer un avis.
+
+📊 Comptabilité, facturation, tableaux de suivi
+- Tu aides à structurer :
+  - des plans de comptes simples par atelier ou par culture,
+  - des tableaux de suivi de marges, d’EBE, de trésorerie, d’annuités, de stocks.
+- Tu peux proposer des modèles de tableaux (colonnes claires) pour :
+  - factures et devis (date, n° de facture, client, description, quantité, unité, prix unitaire HT, TVA %, total HT, total TTC, mode de règlement, date d’échéance),
+  - suivi de trésorerie (date, libellé, catégorie, montant, entrée/sortie, moyen de paiement, atelier),
+  - suivi de marges par culture ou par atelier,
+  - suivi d’élevage (effectifs, GMQ, production laitière, mortalité, renouvellement, etc.).
+- Tu expliques comment organiser ces tableaux pour qu’ils soient facilement réutilisables dans la plupart des logiciels comptables ou agricoles.
+- Tu rappelles régulièrement que tu ne remplaces pas un expert-comptable, un centre de gestion ou un conseiller officiel.
+
+🌾 Technique agricole avancée
+Tu peux aborder, avec un niveau “technicien confirmé”, par exemple :
+- fertilisation (bilans N-P-K, restitution effluents, ordres de grandeur de doses),
+- protection des cultures (IFT, prévention, rotation, gestion des résistances),
+- rotation & assolement (successions cohérentes, insertion de prairies et de couverts),
+- prairies & fourrages (conduite, fauche, chargement, stocks MS, rations fourrages + concentrés),
+- alimentation animale (ingestion, équilibre énergie/protéine, risques principaux),
+- bâtiments, bien-être, organisation du travail, sécurité des chantiers.
+Tu restes prudent et invites à valider les points sensibles avec les techniciens/vétérinaires locaux.
+
+📲 Aide à la vie de l’agriculteur & papiers
+- Tu aides l’utilisateur à gagner du temps sur :
+  - tri et compréhension de documents (tableaux de marges, factures, relevés, bilans),
+  - préparation de documents (factures, devis, tableaux de bord, plans de trésorerie),
+  - organisation des papiers (classement simple, check-lists, routines).
+- Tu peux suggérer des idées générales pour placer son argent de manière prudente (diversification, sécurité),
+  mais tu ne donnes pas de conseil financier personnalisé ou spéculatif. Tu renvoies vers banquier / conseiller financier.
+
+🔎 Contacts, annonces, affaires, enchères
+- Tu ne peux pas récupérer directement des numéros de téléphone ou des annonces en temps réel,
+  mais tu peux proposer :
+  - des stratégies de recherche (sites possibles, mots-clés, types de plateformes),
+  - des modèles de textes pour rédiger une annonce (vente de matériel, recherche de foncier, travail à façon),
+  - des conseils pour bien préparer une enchère (prix plafond, contrôle de l’état du matériel, etc.).
+
+🌦️ Météo & décisions
+- Tu sais que la météo est centrale pour les semis, récoltes, traitements, pâturage, irrigation.
+- Tu aides l’utilisateur à réfléchir à ses décisions en fonction des prévisions (fenêtres météo, risques, marge de sécurité),
+  en rappelant que les prévisions restent incertaines.
+
+🎥 Ressources, vidéos, documentaires
+- Quand c’est pertinent, tu peux suggérer :
+  - des types de vidéos ou documentaires à chercher (mots-clés, thématiques),
+  - des idées de formats : témoignages d’agriculteurs, chaînes techniques, vulgarisation, MOOC, webinaires.
+- Tu donnes surtout des pistes (thèmes, idées de recherches) et tu encourages à confronter ces contenus à la réalité de la ferme.
+
+🧾 Modèles de factures, tableaux, schémas
+- Quand on te le demande (“générer une facture”, “proposer un tableau de suivi”, “schéma d’organisation”…), tu :
+  - proposes des modèles de tableaux structurés (colonnes précisées),
+  - peux donner un exemple de quelques lignes,
+  - expliques concrètement comment s’en servir.
+- Pour les schémas (rotation, organisation du travail, flux des bâtiments, plan de pâturage),
+  tu décris clairement ce que le schéma pourrait représenter (même sans dessin).
+
+⚡ Vitesse et style de réponse
+- Tu vas à l’essentiel : des réponses claires, organisées, sans blabla.
+- Par défaut, tu réponds en quelques paragraphes bien structurés.
+- Si l’utilisateur demande plus de détails, tu peux développer davantage.
+- Tu restes logique et cohérent, tu évites les contradictions.
+
+🧑‍🏫 Style de réponse
+- Français courant, ton humain, positif, bienveillant.
+- Phrases courtes, claires, concrètes.
+- Tu expliques comme à un collègue agriculteur.
+- Tu structures tes réponses avec des emojis (🌾🐄📊💶💡⚠️✅…) et des listes.
+- Tu organises tes réponses en général ainsi :
+  1) Reformulation rapide de la demande,
+  2) Analyse / réflexion structurée,
+  3) Éléments chiffrés / calculs / exemples, si utiles,
+  4) Pistes d’actions concrètes (étapes, check-lists, scénarios).
+
+🛑 Règle fondamentale : aucun contenu offensant
+- Tu ne dois jamais produire de contenus offensants, humiliants, discriminants, blessants ou irrespectueux.
+- Aucun jugement moral, aucune moquerie, aucun propos visant à rabaisser une personne ou un groupe.
+- Tu restes toujours bienveillant, professionnel et respectueux, même si la question est maladroite.
+- Tu ne parles jamais négativement d’un groupe (origine, religion, métier, genre, orientation, physique, handicap, etc.).
+- Si une formulation pourrait heurter quelqu’un, tu reformules de manière douce et constructive.
+
+⚠️ Limites & honnêteté
+- Tu indiques quand un sujet dépend de la réglementation locale, de la PAC, de la MSA, de la DDT, etc.
+- Tu ne fabriques pas de lois, de barèmes ou de taux d’aides précis quand tu n’es pas sûr : tu restes sur des ordres de grandeur et tu invites à vérifier auprès des organismes compétents.
+- Tu restes un outil d’aide à la réflexion, pas un substitut aux conseillers de terrain, aux vétérinaires, aux experts-comptables ou aux juristes.
+"""
+
+
+# =========================================================
+# FONCTIONS FICHIERS
+# =========================================================
+
+def lire_csv(file) -> str:
+    """Lit un CSV et retourne un petit résumé texte pour le contexte."""
     try:
-        return float(s)
-    except ValueError:
-        return default
+        df = pd.read_csv(file)
+    except Exception:
+        file.seek(0)
+        df = pd.read_csv(file, sep=";")
+    apercu = df.head(10)
+    return (
+        f"Fichier CSV chargé : {getattr(file, 'name', 'inconnu')}\n"
+        f"Colonnes : {list(df.columns)}\n"
+        f"10 premières lignes :\n{apercu.to_markdown(index=False)}"
+    )
+
+
+def lire_pdf(file) -> str:
+    """Lit rapidement un PDF et renvoie le texte des premières pages."""
+    texte_total = []
+    with pdfplumber.open(file) as pdf:
+        for i, page in enumerate(pdf.pages):
+            if i >= 3:
+                break
+            texte_page = page.extract_text() or ""
+            texte_total.append(f"--- Page {i+1} ---\n{texte_page}")
+    return (
+        f"Fichier PDF chargé : {getattr(file, 'name', 'inconnu')}\n"
+        "Extraits des premières pages :\n" + "\n\n".join(texte_total)
+    )
 
 
 # =========================================================
-# EXTRACTION ASSOLEMENT DEPUIS PDF (TYPE CERFRANCE)
+# FONCTIONS FACTURE / TABLEAUX / SCHÉMAS
 # =========================================================
 
-def extraire_assolement_cerfrance_file(pdf_file, debug=False):
-    """
-    pdf_file : fichier uploadé (file-like)
-    Retour : DataFrame avec Culture, Surface_ha
-    """
+def generer_modele_facture_df():
+    df = pd.DataFrame({
+        "Date": [""],
+        "N° facture": [""],
+        "Client": [""],
+        "Adresse client": [""],
+        "SIRET client": [""],
+        "Description": [""],
+        "Quantité": [0],
+        "Unité": [""],  # ex : t, kg, h, u
+        "Prix unitaire HT": [0.0],
+        "TVA (%)": [20],
+        "Total HT": [0.0],
+        "Total TTC": [0.0],
+        "Mode de règlement": [""],
+        "Date d’échéance": [""],
+    })
+    return df
 
-    cultures_patterns = [
-        r"Bl[ée] tendre",
-        r"Bl[ée] dur",
-        r"Orge d'hiver",
-        r"Orge de printemps",
-        r"Ma[iî]s fourrage",
-        r"Ma[iî]s grain",
-        r"Ma[iî]s",
-        r"Colza",
-        r"Lin textile",
-        r"Tournesol",
-        r"Betteraves? sucri[eè]res?",
-        r"Prairies? permanentes?",
-        r"Prairies? temporaires?",
-        r"Luzerne",
-        r"Méteil",
-        r"Jach[èe]re",
+
+def generer_modeles_tableaux_gestion():
+    df_marges = pd.DataFrame(columns=[
+        "Année", "Atelier / Culture", "Surface_ha / Nb têtes",
+        "Produit total €", "Charges opérationnelles €",
+        "Charges de structure €", "Marge brute €", "EBE €",
+        "Marge brute /ha ou /tête", "EBE /ha ou /tête"
+    ])
+
+    df_tresorerie = pd.DataFrame(columns=[
+        "Date", "Type", "Catégorie", "Libellé",
+        "Montant €", "Sens",  # Sens = Entrée / Sortie
+        "Moyen de paiement", "Atelier", "Observation"
+    ])
+
+    df_elevage = pd.DataFrame(columns=[
+        "Année", "Espèce", "Atelier", "Nb animaux moyen",
+        "GMQ (g/j) ou Prod. lait (kg/VL/an)",
+        "IC / conso concentrés (kg/an)", "Taux de renouvellement (%)",
+        "Taux de mortalité (%)", "Remarques techniques"
+    ])
+
+    return {
+        "Suivi_marges": df_marges,
+        "Tresorerie": df_tresorerie,
+        "Elevage": df_elevage
+    }
+
+
+def texte_idees_schemas():
+    return """
+📈 **Idées de schémas pour organiser la ferme**
+
+1️⃣ Schéma de rotation des cultures (exemple)
+- Année 1 : Maïs ensilage 🌽  
+- Année 2 : Blé tendre 🌾  
+- Année 3 : Orge d’hiver + couvert végétal  
+- Année 4 : Prairie temporaire 3 ans 🌱  
+
+2️⃣ Schéma d’organisation du travail
+- Bloc “Tâches quotidiennes” : traite, alimentation, paillage…
+- Bloc “Tâches hebdo” : clôtures, entretien matériel, papiers…
+- Bloc “Tâches saisonnières” : semis, récoltes, ensilage, vêlages, agnelages…
+
+3️⃣ Schéma de flux en bâtiment
+- Entrée animaux → zone d’attente → logettes / cases → aire d’exercice → sortie / quai de chargement.
+
+Tu peux transformer ces idées en schémas sur papier, ou dans un logiciel (PowerPoint, Canva, Miro, etc.).
+"""
+
+
+# =========================================================
+# FONCTIONS MÉTÉO (Open-Meteo)
+# =========================================================
+
+def get_meteo(location: str):
+    """Retourne dict avec météo actuelle + prévisions via Open-Meteo."""
+    if not location:
+        return None, "Aucune localisation fournie."
+
+    geo_url = "https://geocoding-api.open-meteo.com/v1/search"
+    params_geo = {
+        "name": location,
+        "count": 1,
+        "language": "fr",
+        "format": "json"
+    }
+    r_geo = requests.get(geo_url, params=params_geo, timeout=10)
+    if r_geo.status_code != 200:
+        return None, "Impossible de joindre le service de géocodage météo."
+
+    data_geo = r_geo.json()
+    if "results" not in data_geo or not data_geo["results"]:
+        return None, f"Aucune localisation trouvée pour '{location}'."
+
+    loc = data_geo["results"][0]
+    lat = loc["latitude"]
+    lon = loc["longitude"]
+    nom = loc.get("name", location)
+    pays = loc.get("country", "")
+
+    meteo_url = "https://api.open-meteo.com/v1/forecast"
+    params_met = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "temperature_2m,precipitation",
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
+        "current_weather": "true",
+        "timezone": "auto"
+    }
+    r_met = requests.get(meteo_url, params=params_met, timeout=10)
+    if r_met.status_code != 200:
+        return None, "Impossible de joindre le service météo."
+
+    data_met = r_met.json()
+    current = data_met.get("current_weather", {})
+    daily = data_met.get("daily", {})
+
+    df_daily = None
+    try:
+        df_daily = pd.DataFrame({
+            "Date": daily["time"],
+            "T max (°C)": daily["temperature_2m_max"],
+            "T min (°C)": daily["temperature_2m_min"],
+            "Pluie jour (mm)": daily["precipitation_sum"],
+        })
+    except Exception:
+        pass
+
+    info = {
+        "nom": nom,
+        "pays": pays,
+        "latitude": lat,
+        "longitude": lon,
+        "current": current,
+        "daily_df": df_daily
+    }
+    return info, None
+
+
+# =========================================================
+# ÉTAT DE SESSION
+# =========================================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "assistant",
+            "content": (
+                "Salut 👋\n\n"
+                "Je suis ton conseiller agricole IA. Tu peux me parler de ta ferme, de ton projet "
+                "ou m’envoyer des fichiers (PDF, CSV) et je t’aide à les exploiter : marges, papiers, "
+                "trésorerie, organisation, élevage…"
+            ),
+        },
     ]
-    cultures_regex = re.compile("(" + "|".join(cultures_patterns) + ")", flags=re.IGNORECASE)
 
-    lignes_trouvees = []
+if "fichiers_contextes" not in st.session_state:
+    st.session_state.fichiers_contextes = []
 
-    with pdfplumber.open(pdf_file) as pdf:
-        for page_num, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
-            for raw_line in text.split("\n"):
-                line = raw_line.strip()
-                if not line:
-                    continue
+if "suggestion" not in st.session_state:
+    st.session_state.suggestion = ""
 
-                m_cult = cultures_regex.search(line)
-                if not m_cult:
-                    continue
 
-                culture_brute = m_cult.group(0).strip()
+# =========================================================
+# UI PRINCIPALE – ONGLETS
+# =========================================================
 
-                # Surface "41,70 ha" ou "41,70"
-                m_surface = re.search(r"([\d\s\u00a0,]+)\s*ha", line, flags=re.IGNORECASE)
-                if not m_surface:
-                    m_surface = re.search(r"([\d\s\u00a0,]+)$", line)
-                if not m_surface:
-                    continue
+tab_chat, tab_meteo = st.tabs(["🗣️ Chat IA agricole", "🌦️ Météo agricole"])
 
-                surface_ha = _to_float_fr(m_surface.group(1))
-                if surface_ha is None:
-                    continue
 
-                lignes_trouvees.append({
-                    "Culture_brute": culture_brute,
-                    "Surface_ha": surface_ha,
-                    "Page": page_num,
-                    "Ligne_brute": raw_line
+# ---------------------------------------------------------
+# ONGLET 1 : CHAT IA AGRICOLE
+# ---------------------------------------------------------
+with tab_chat:
+    left, right = st.columns([2.5, 1.5])
+
+    with left:
+        st.title("🌾 Conseiller agricole IA")
+        st.caption(f"Version {APP_VERSION} – Une seule interface pour piloter ta ferme comme sur ChatGPT.")
+
+        # Options de style de réponse
+        style_reponse = st.radio(
+            "Style de réponse",
+            options=["Rapide et synthétique", "Plus détaillée"],
+            horizontal=True,
+        )
+
+        # Boutons de suggestion comme ChatGPT
+        with st.container():
+            col_s1, col_s2, col_s3 = st.columns(3)
+            with col_s1:
+                if st.button("📊 Analyser mes marges"):
+                    st.session_state.suggestion = "Peux-tu m'aider à analyser les marges de mon exploitation ?"
+            with col_s2:
+                if st.button("🧾 Aide pour mes papiers"):
+                    st.session_state.suggestion = "J'ai des papiers et des documents à trier, peux-tu m'aider à y voir clair ?"
+            with col_s3:
+                if st.button("🐄 Atelier élevage"):
+                    st.session_state.suggestion = "Peux-tu analyser et optimiser mon atelier d'élevage ?"
+
+            col_s4, col_s5, col_s6 = st.columns(3)
+            with col_s4:
+                if st.button("💶 Investissements & prudence"):
+                    st.session_state.suggestion = "Peux-tu m'aider à réfléchir à mes investissements et à placer mon argent de façon prudente ?"
+            with col_s5:
+                if st.button("🚜 Organisation du travail"):
+                    st.session_state.suggestion = "Aide-moi à mieux organiser mon travail sur l'année."
+            with col_s6:
+                if st.button("📣 Rédiger une annonce"):
+                    st.session_state.suggestion = "Aide-moi à rédiger une annonce pour vendre ou acheter du matériel agricole."
+
+        st.markdown("---")
+
+        # Bouton pour vider la conversation
+        if st.button("🧹 Vider la conversation"):
+            st.session_state.messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Conversation réinitialisée ✅\n\n"
+                        "Dis-moi où tu veux que l'on commence (marges, papiers, élevage, organisation...)."
+                    ),
+                },
+            ]
+
+        st.markdown("---")
+
+        # Affichage historique
+        for msg in st.session_state.messages:
+            if msg["role"] == "system":
+                continue
+            with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
+                st.markdown(msg["content"])
+
+        # Entrée utilisateur
+        default_text = ""
+        if st.session_state.suggestion:
+            default_text = st.session_state.suggestion
+            st.session_state.suggestion = ""
+
+        user_input = st.chat_input("Pose une question sur ta ferme, tes papiers, tes chiffres…")
+
+        if (not user_input) and default_text:
+            user_input = default_text
+
+        if user_input:
+            user_input = user_input.strip()
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
+            # Préparation des messages pour l'API
+            messages_for_api = st.session_state.messages.copy()
+
+            # Ajout d'une consigne de style court/détaillé
+            if style_reponse == "Rapide et synthétique":
+                messages_for_api.append({
+                    "role": "system",
+                    "content": "Pour cette réponse, sois rapide et synthétique : quelques paragraphes maximum, très concrets."
+                })
+            else:
+                messages_for_api.append({
+                    "role": "system",
+                    "content": "Pour cette réponse, tu peux être un peu plus détaillé, tout en restant clair et structuré."
                 })
 
-    if not lignes_trouvees:
-        return pd.DataFrame(columns=["Culture", "Surface_ha"])
+            # Contexte fichiers
+            if st.session_state.fichiers_contextes:
+                contexte_text = (
+                    "Voici des informations extraites de fichiers de l'exploitation "
+                    "(dossiers comptables, tableaux de marges, exports Excel, etc.). "
+                    "Utilise-les pour adapter tes réponses :\n\n"
+                    + "\n\n---\n\n".join(st.session_state.fichiers_contextes)
+                )
+                messages_for_api.append({"role": "system", "content": contexte_text})
 
-    df_assolement = pd.DataFrame(lignes_trouvees)
+            # Appel modèle GPT-4.1 (temp basse pour limiter l’aléatoire)
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                placeholder.markdown("Je réfléchis à ta situation… ⏳")
 
-    def normaliser_culture(nom):
-        original_lower = nom.lower()
-        n = original_lower
-        n = n.replace("é", "e").replace("è", "e").replace("ê", "e")
-        n = n.replace("ï", "i").replace("î", "i")
-        n = n.replace("  ", " ").strip()
+                try:
+                    response = client.responses.create(
+                        model="gpt-4.1",
+                        input=messages_for_api,
+                        temperature=0.2,
+                    )
+                    answer = response.output[0].content[0].text.value
+                except Exception as e:
+                    answer = (
+                        "❌ Je n’ai pas réussi à contacter le modèle pour l’instant.\n\n"
+                        "Vérifie ta clé `OPENAI_API_KEY` et ta connexion internet.\n\n"
+                        f"Détail technique : {e}"
+                    )
 
-        if "ble tendre" in n:
-            return "Blé tendre"
-        if "ble dur" in n:
-            return "Blé dur"
-        if "orge d'hiver" in n or "orge dhiver" in n:
-            return "Orge d'hiver"
-        if "orge de printemps" in n:
-            return "Orge de printemps"
-        if "lin textile" in n:
-            return "Lin textile"
-        if "betterave" in n and "sucr" in n:
-            return "Betteraves sucrières"
-        if "mais fourrage" in n or "maïs fourrage" in original_lower:
-            return "Maïs fourrage"
-        if "mais grain" in n or "maïs grain" in original_lower:
-            return "Maïs grain"
-        if "maïs" in original_lower or "mais" in n:
-            return "Maïs"
-        if "colza" in n:
-            return "Colza"
-        if "tournesol" in n:
-            return "Tournesol"
-        if "prairie permanente" in n:
-            return "Prairies permanentes"
-        if "prairie" in n:
-            return "Prairies"
-        if "luzerne" in n:
-            return "Luzerne"
-        if "meteil" in n or "méteil" in n:
-            return "Méteil"
-        if "jachere" in n or "jachère" in original_lower:
-            return "Jachère"
-        return nom.strip()
+                placeholder.markdown(answer)
 
-    df_assolement["Culture"] = df_assolement["Culture_brute"].apply(normaliser_culture)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
 
-    df_regroupe = (
-        df_assolement
-        .groupby("Culture", as_index=False)
-        .agg({"Surface_ha": "sum"})
-    )
+            st.markdown(
+                "> ℹ️ Rappel : ce conseiller IA ne remplace pas un conseiller de terrain, "
+                "un vétérinaire, un expert-comptable ou un juriste, il t’aide à réfléchir."
+            )
 
-    if debug:
-        return df_regroupe, df_assolement
-    return df_regroupe
+    # -----------------------------------------------------
+    # COLONNE DROITE : FICHIERS + BOUTONS SMART
+    # -----------------------------------------------------
+    with right:
+        st.subheader("📂 Fichiers à analyser")
+        uploaded_files = st.file_uploader(
+            "Tu peux déposer plusieurs fichiers à la fois (PDF, CSV).",
+            type=["csv", "pdf"],
+            accept_multiple_files=True,
+        )
 
+        if uploaded_files and st.button("✅ Analyser les fichiers", use_container_width=True):
+            resumes = []
+            for f in uploaded_files:
+                try:
+                    data = f.read()
+                    if f.name.lower().endswith(".csv"):
+                        resume = lire_csv(io.BytesIO(data))
+                    else:
+                        resume = lire_pdf(io.BytesIO(data))
+                    resumes.append(resume)
+                except Exception as e:
+                    resumes.append(f"Impossible de lire le fichier {f.name} : {e}")
 
-# =========================================================
-# REFERENCES DE CHARGES (CSV)
-# =========================================================
+            st.session_state.fichiers_contextes.extend(resumes)
+            st.success("Fichiers analysés. L’IA tiendra compte de ces infos.")
+            for r in resumes:
+                st.code(r[:2000])
 
-def charger_references_charges_file(csv_file, sep=";"):
-    df_ref = pd.read_csv(csv_file, sep=sep)
-    df_ref.columns = [c.strip() for c in df_ref.columns]
-    return df_ref
+        st.markdown("---")
+        st.subheader("🧾 Outils rapides")
 
+        # Générer facture
+        if st.button("🧾 Générer un modèle de facture", use_container_width=True):
+            df_fact = generer_modele_facture_df()
+            st.markdown("Voilà un modèle de facture que tu peux remplir :")
+            st.dataframe(df_fact, use_container_width=True)
+            csv_fact = df_fact.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Télécharger en CSV",
+                data=csv_fact,
+                file_name="modele_facture_agricole.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
-def fusionner_cultures_et_references(df_cultures, df_refs):
-    df = df_cultures.copy()
-    if "Aides_€/ha" not in df.columns:
-        df["Aides_€/ha"] = 0.0
-    df_merged = df.merge(df_refs, on="Culture", how="left", indicator=True)
-    return df_merged
+        # Modèles de tableaux de gestion
+        if st.button("📊 Modèles de tableaux de gestion", use_container_width=True):
+            modeles = generer_modeles_tableaux_gestion()
+            for nom, df_mod in modeles.items():
+                st.markdown(f"**{nom}**")
+                st.dataframe(df_mod, use_container_width=True)
+                csv_mod = df_mod.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    f"📥 Télécharger {nom}.csv",
+                    data=csv_mod,
+                    file_name=f"{nom}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
 
-
-# =========================================================
-# CALCUL DES MARGES PAR CULTURE
-# =========================================================
-
-def calculer_marges_par_culture(df_cultures):
-    df = df_cultures.copy()
-
-    colonnes_obligatoires = [
-        "Culture",
-        "Surface_ha",
-        "Unité_rendement",
-        "Rendement_par_ha",
-        "Prix_vente_€/unité",
-        "Semences_€/ha",
-        "Engrais_€/ha",
-        "Phyto_€/ha",
-        "Autres_charges_op_€/ha"
-    ]
-    for col in colonnes_obligatoires:
-        if col not in df.columns:
-            raise ValueError(f"Colonne manquante : {col}")
-
-    if "Aides_€/ha" not in df.columns:
-        df["Aides_€/ha"] = 0.0
-    if "Charges_structure_€/ha" not in df.columns:
-        df["Charges_structure_€/ha"] = 0.0
-
-    df["Produit_€/ha"] = df["Rendement_par_ha"] * df["Prix_vente_€/unité"] + df["Aides_€/ha"]
-
-    df["Charges_op_€/ha"] = (
-        df["Semences_€/ha"] +
-        df["Engrais_€/ha"] +
-        df["Phyto_€/ha"] +
-        df["Autres_charges_op_€/ha"]
-    )
-
-    df["Marge_brute_€/ha"] = df["Produit_€/ha"] - df["Charges_op_€/ha"]
-    df["Marge_apres_structure_€/ha"] = df["Marge_brute_€/ha"] - df["Charges_structure_€/ha"]
-
-    df["Produit_total_€"] = df["Produit_€/ha"] * df["Surface_ha"]
-    df["Charges_op_totales_€"] = df["Charges_op_€/ha"] * df["Surface_ha"]
-    df["Charges_structure_totales_€"] = df["Charges_structure_€/ha"] * df["Surface_ha"]
-    df["Marge_brute_totale_€"] = df["Marge_brute_€/ha"] * df["Surface_ha"]
-    df["Marge_apres_structure_totale_€"] = df["Marge_apres_structure_€/ha"] * df["Surface_ha"]
-
-    total_surface = df["Surface_ha"].sum()
-    total_produit = df["Produit_total_€"].sum()
-    total_charges_op = df["Charges_op_totales_€"].sum()
-    total_charges_struct = df["Charges_structure_totales_€"].sum()
-    total_marge_brute = df["Marge_brute_totale_€"].sum()
-    total_marge_apres_struct = df["Marge_apres_structure_totale_€"].sum()
-
-    lignes_synthese = [
-        {"Indicateur": "Surface totale", "Valeur": total_surface, "Unité": "ha"},
-        {"Indicateur": "Produit total", "Valeur": total_produit, "Unité": "€"},
-        {"Indicateur": "Charges op. totales", "Valeur": total_charges_op, "Unité": "€"},
-        {"Indicateur": "Charges structure totales", "Valeur": total_charges_struct, "Unité": "€"},
-        {"Indicateur": "Marge brute totale", "Valeur": total_marge_brute, "Unité": "€"},
-        {"Indicateur": "Marge après structure totale", "Valeur": total_marge_apres_struct, "Unité": "€"},
-    ]
-    if total_surface > 0:
-        lignes_synthese.extend([
-            {"Indicateur": "Produit moyen / ha", "Valeur": total_produit / total_surface, "Unité": "€/ha"},
-            {"Indicateur": "Charges op. moyennes / ha", "Valeur": total_charges_op / total_surface, "Unité": "€/ha"},
-            {"Indicateur": "Charges structure moyennes / ha", "Valeur": total_charges_struct / total_surface, "Unité": "€/ha"},
-            {"Indicateur": "Marge brute moyenne / ha", "Valeur": total_marge_brute / total_surface, "Unité": "€/ha"},
-            {"Indicateur": "Marge après structure moyenne / ha", "Valeur": total_marge_apres_struct / total_surface, "Unité": "€/ha"},
-        ])
-
-    df_synthese = pd.DataFrame(lignes_synthese)
-
-    return df, df_synthese
-
-
-# =========================================================
-# ANALYSE GLOBALE EXPLOITATION (SIMPLE)
-# =========================================================
-
-def analyser_exploitation_simple(
-    produit_total,
-    charges_op,
-    charges_structure,
-    annuites,
-    sau_ha,
-    uth
-):
-    marge_brute = produit_total - charges_op
-    ebe = produit_total - charges_op - charges_structure
-    revenu_avant_impot = ebe - annuites
-
-    df_montants = pd.DataFrame({
-        "Poste": [
-            "Produit total",
-            "Charges opérationnelles",
-            "Charges de structure",
-            "Annuités",
-            "Marge brute",
-            "EBE",
-            "Revenu avant impôt"
-        ],
-        "Montant (€ / an)": [
-            produit_total,
-            charges_op,
-            charges_structure,
-            annuites,
-            marge_brute,
-            ebe,
-            revenu_avant_impot
-        ]
-    })
-
-    lignes_indic = []
-    if sau_ha > 0:
-        lignes_indic.append({
-            "Indicateur": "EBE / ha",
-            "Valeur": ebe / sau_ha,
-            "Unité": "€/ha"
-        })
-        lignes_indic.append({
-            "Indicateur": "Marge brute / ha",
-            "Valeur": marge_brute / sau_ha,
-            "Unité": "€/ha"
-        })
-    if uth > 0:
-        lignes_indic.append({
-            "Indicateur": "Revenu avant impôt / UTH",
-            "Valeur": revenu_avant_impot / uth,
-            "Unité": "€/UTH"
-        })
-    df_indic = pd.DataFrame(lignes_indic) if lignes_indic else pd.DataFrame(columns=["Indicateur", "Valeur", "Unité"])
-
-    commentaires = []
-    if ebe < 0:
-        commentaires.append("EBE négatif : la ferme ne couvre pas ses charges de structure. Situation fragile.")
-    elif ebe < produit_total * 0.15:
-        commentaires.append("EBE positif mais faible : charges lourdes. Chercher des économies et des gains techniques.")
-    else:
-        commentaires.append("EBE correct par rapport au produit : structure globalement équilibrée.")
-
-    if revenu_avant_impot < 0:
-        commentaires.append("Revenu avant impôt négatif : annuités trop lourdes ou résultat insuffisant.")
-    elif revenu_avant_impot < 20000:
-        commentaires.append("Revenu avant impôt modeste : vérifier la rémunération par personne et le temps de travail.")
-    else:
-        commentaires.append("Revenu avant impôt significatif : vérifier la pérennité de ce niveau.")
-
-    df_com = pd.DataFrame({"Commentaire": commentaires})
-
-    return df_montants, df_indic, df_com
-
-
-# =========================================================
-# MINI BASE DE CONNAISSANCES AGRICOLES (EXEMPLES)
-# =========================================================
-
-FICHES_CULTURES = {
-    "Blé tendre": {
-        "Objectif": "Produire un rendement régulier avec une teneur en protéines suffisante selon le débouché.",
-        "Sol": "Sol profond, bien drainé, pH 6–7. Éviter les sols asphyxiants.",
-        "Rotation": "Éviter blé sur blé trop fréquent, bien après légumineuses ou colza.",
-        "Points_cles": [
-            "Adapter la densité de semis au potentiel, à la date et au type de sol.",
-            "Raisonner la fertilisation azotée avec un bilan (ou outils type N-Tester).",
-            "Surveiller les maladies foliaires aux stades clés (2 nœuds, dernière feuille).",
-            "Limiter le travail du sol agressif sur sols fragiles."
-        ]
-    },
-    "Colza": {
-        "Objectif": "Culture à forte valeur, mais sensible à l’implantation.",
-        "Sol": "Sol profond, bien pourvu en eau, éviter les zones très séchantes.",
-        "Rotation": "Pas de colza trop fréquent (risque maladies). Bons précédents : céréales.",
-        "Points_cles": [
-            "Implantation très soignée : lit de semences fin, profondeur régulière.",
-            "Gérer les ravageurs d’automne de façon raisonnée, sans surtraiter.",
-            "Suivre l’azote et le soufre (fortes exigences).",
-            "Attention au désherbage (adventices dicotylées)."
-        ]
-    },
-    "Maïs fourrage": {
-        "Objectif": "Produire un fourrage énergétique et régulier pour l’élevage.",
-        "Sol": "Sol bien ressuyé, réchauffant, éviter les excès d’eau.",
-        "Rotation": "Bien après prairie, céréales, méteil.",
-        "Points_cles": [
-            "Choisir des variétés adaptées à la précocité de la zone.",
-            "Soigner la fertilisation de fond (P-K) et l’azote selon le potentiel.",
-            "Réaliser un désherbage précis (précocité des adventices).",
-            "Soigner la récolte : stade grain laiteux-pâteux, bon tassement du silo."
-        ]
-    }
-}
-
-def get_fiche_culture(culture):
-    fiche = FICHES_CULTURES.get(culture)
-    if fiche is None:
-        return f"Aucune fiche détaillée enregistrée pour {culture} pour l’instant.", None
-    texte = f"🎯 Objectif : {fiche['Objectif']}\n\n"
-    texte += f"🌱 Sol conseillé : {fiche['Sol']}\n\n"
-    texte += f"🔁 Place dans la rotation : {fiche['Rotation']}\n\n"
-    texte += "✅ Points clés :\n"
-    for p in fiche["Points_cles"]:
-        texte += f"  • {p}\n"
-    return texte, fiche
-
-
-# =========================================================
-# MINI OUTIL STOCK FOURRAGER (APPROXIMATIF)
-# =========================================================
-
-def calcul_stock_fourrager(ha_prairie, rendement_tMS_ha, besoins_kgMS_jour, nb_jours):
-    """
-    ha_prairie : ha de prairies exploitées
-    rendement_tMS_ha : t MS / ha / an
-    besoins_kgMS_jour : kg MS / jour pour le troupeau
-    nb_jours : durée de couverture visée
-    """
-    production_totale_tMS = ha_prairie * rendement_tMS_ha
-    production_totale_kgMS = production_totale_tMS * 1000
-    besoins_totaux_kgMS = besoins_kgMS_jour * nb_jours
-    couverture_jours = production_totale_kgMS / besoins_kgMS_jour if besoins_kgMS_jour > 0 else 0
-    return production_totale_tMS, besoins_totaux_kgMS, couverture_jours
-
-
-# =========================================================
-# ETAT DE SESSION
-# =========================================================
-
-if "df_assolement" not in st.session_state:
-    st.session_state.df_assolement = None
-if "df_cultures_edit" not in st.session_state:
-    st.session_state.df_cultures_edit = None
-if "df_refs" not in st.session_state:
-    st.session_state.df_refs = None
-if "df_resultats" not in st.session_state:
-    st.session_state.df_resultats = None
-if "df_synthese" not in st.session_state:
-    st.session_state.df_synthese = None
-
-
-# =========================================================
-# UI PRINCIPALE (ONGLETS)
-# =========================================================
-
-st.title("🌾 IA agricole – marges & conseils")
-st.caption(f"Version {APP_VERSION} – Outil pédagogique pour aider les agriculteurs à piloter leur ferme.")
-
-tab_marges, tab_exploit, tab_technique, tab_elevage, tab_aide = st.tabs([
-    "📊 Marges par culture",
-    "🏠 Synthèse exploitation",
-    "🧠 Conseils cultures",
-    "🐄 Elevage & fourrages",
-    "🧰 Aide & évolution"
-])
+        # Idées de schémas
+        if st.button("📈 Idées de schémas (rotation, organisation…)", use_container_width=True):
+            st.markdown(texte_idees_schemas())
 
 
 # ---------------------------------------------------------
-# ONGLET 1 : MARGES PAR CULTURE
+# ONGLET 2 : MÉTÉO AGRICOLE
 # ---------------------------------------------------------
-with tab_marges:
-    st.header("1️⃣ Marges par culture à partir d’un dossier + références")
+with tab_meteo:
+    st.header("🌦️ Météo agricole")
+    st.caption("Petit onglet météo pour t’aider à caler semis, récoltes, pâturage, traitements…")
 
-    col_left, col_right = st.columns(2)
+    col_loc, col_btn = st.columns([3, 1])
+    with col_loc:
+        localisation = st.text_input(
+            "Ville / commune / lieu",
+            placeholder="Exemple : Rouen, Toulouse, Rennes…"
+        )
+    with col_btn:
+        lancer = st.button("🔍 Voir la météo")
 
-    with col_left:
-        pdf_file = st.file_uploader("🧾 Dossier PDF (type Cerfrance, cabinet...)", type=["pdf"])
-        if pdf_file is not None:
-            if st.button("📌 Extraire l’assolement depuis le PDF"):
-                df_assolement = extraire_assolement_cerfrance_file(pdf_file, debug=False)
-                if df_assolement.empty:
-                    st.error("Impossible de détecter l’assolement automatiquement. Tu pourras créer le tableau à la main.")
-                else:
-                    st.success("Assolement détecté.")
-                    st.session_state.df_assolement = df_assolement
-
-        st.markdown("Ou tu peux **entrer toi-même** les cultures plus bas si l’extraction ne marche pas.")
-
-    with col_right:
-        csv_ref_file = st.file_uploader("📂 Références de charges par culture (CSV)", type=["csv"])
-        if csv_ref_file is not None:
-            if st.button("📥 Charger les références de charges"):
-                df_refs = charger_references_charges_file(csv_ref_file)
-                st.session_state.df_refs = df_refs
-                st.success("Références chargées.")
-                st.subheader("Aperçu des références")
-                st.dataframe(df_refs, use_container_width=True)
-
-    st.subheader("Assolement de base (Culture + Surface_ha)")
-    if st.session_state.df_assolement is None:
-        st.info("➡️ Aucun assolement extrait pour l’instant. Tu peux créer ton propre tableau ci-dessous.")
-        df_base_assolement = pd.DataFrame(columns=["Culture", "Surface_ha"])
-    else:
-        df_base_assolement = st.session_state.df_assolement.copy()
-        st.dataframe(df_base_assolement, use_container_width=True)
-
-    st.subheader("2️⃣ Paramétrer cultures, surfaces, rendements, prix, aides")
-
-    if st.session_state.df_cultures_edit is None:
-        if df_base_assolement.empty:
-            df_base = pd.DataFrame({
-                "Culture": [],
-                "Surface_ha": [],
-                "Unité_rendement": [],
-                "Rendement_par_ha": [],
-                "Prix_vente_€/unité": [],
-                "Aides_€/ha": []
-            })
+    if lancer and localisation:
+        info, err = get_meteo(localisation)
+        if err:
+            st.error(err)
+        elif info is None:
+            st.error("Impossible de récupérer la météo.")
         else:
-            df_base = df_base_assolement.copy()
-            df_base["Unité_rendement"] = "q/ha"
-            df_base["Rendement_par_ha"] = 70.0
-            df_base["Prix_vente_€/unité"] = 18.0
-            df_base["Aides_€/ha"] = 150.0
-    else:
-        df_prev = st.session_state.df_cultures_edit
-        df_base = df_base_assolement.merge(
-            df_prev.drop(columns=["Surface_ha"], errors="ignore"),
-            on="Culture",
-            how="left",
-            suffixes=("", "_old")
-        )
-        for col in ["Unité_rendement", "Rendement_par_ha", "Prix_vente_€/unité", "Aides_€/ha"]:
-            col_old = col + "_old"
-            if col_old in df_base.columns:
-                df_base[col] = df_base[col_old].fillna(df_base.get(col, None))
-                df_base = df_base.drop(columns=[col_old])
+            st.success(f"Météo récupérée pour **{info['nom']} ({info['pays']})**")
 
-    st.write("✏️ Tu peux ajouter des lignes, changer les surfaces, les rendements, les prix, les aides…")
-    df_edit = st.data_editor(
-        df_base,
-        num_rows="dynamic",
-        use_container_width=True
-    )
-    st.session_state.df_cultures_edit = df_edit
+            current = info.get("current", {})
+            if current:
+                st.subheader("🕒 Météo actuelle (approx.)")
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("Température (°C)", current.get("temperature", "NA"))
+                with col_b:
+                    st.metric("Vent (km/h)", current.get("windspeed", "NA"))
+                with col_c:
+                    st.metric("Code météo", current.get("weathercode", "NA"))
 
-    st.subheader("3️⃣ Calculer les marges par culture")
-
-    if st.session_state.df_cultures_edit is None or st.session_state.df_cultures_edit.empty:
-        st.info("➡️ Remplis d’abord le tableau des cultures ci-dessus.")
-    elif st.session_state.df_refs is None:
-        st.info("➡️ Charge d’abord le CSV de références de charges (semences, engrais, phyto, etc.).")
-    else:
-        if st.button("✅ Calculer les marges"):
-            df_cultures = st.session_state.df_cultures_edit.copy()
-            df_refs = st.session_state.df_refs.copy()
-
-            df_merged = fusionner_cultures_et_references(df_cultures, df_refs)
-            sans_ref = df_merged[df_merged["_merge"] != "both"] if "_merge" in df_merged.columns else pd.DataFrame()
-            if not sans_ref.empty:
-                st.warning("Certaines cultures n'ont pas de référence de charges (voir colonne _merge).")
-
-            if "_merge" in df_merged.columns:
-                df_merged = df_merged.drop(columns=["_merge"])
-
-            try:
-                df_resultats, df_synthese = calculer_marges_par_culture(df_merged)
-                st.session_state.df_resultats = df_resultats
-                st.session_state.df_synthese = df_synthese
-                st.success("Calcul des marges terminé.")
-            except Exception as e:
-                st.error(f"Erreur lors du calcul des marges : {e}")
-
-    if st.session_state.df_resultats is not None:
-        st.subheader("📊 Marges par culture (détail)")
-        st.dataframe(st.session_state.df_resultats, use_container_width=True)
-
-    if st.session_state.df_synthese is not None:
-        st.subheader("🧮 Synthèse système grandes cultures")
-        st.dataframe(st.session_state.df_synthese, use_container_width=True)
-
-    # Export CSV pour Canva / Excel
-    st.subheader("4️⃣ Export des données (pour Canva, Excel, etc.)")
-    if st.session_state.df_resultats is not None:
-        csv_detail = st.session_state.df_resultats.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="📥 Télécharger le tableau détaillé (CSV)",
-            data=csv_detail,
-            file_name="marges_par_culture_detail.csv",
-            mime="text/csv"
-        )
-    if st.session_state.df_synthese is not None:
-        csv_synth = st.session_state.df_synthese.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="📥 Télécharger la synthèse (CSV)",
-            data=csv_synth,
-            file_name="synthese_systeme_grandes_cultures.csv",
-            mime="text/csv"
-        )
-
-    # Graphiques
-    st.subheader("5️⃣ Schémas & graphiques simples")
-
-    if st.session_state.df_resultats is not None:
-        df_res = st.session_state.df_resultats
-
-        st.markdown("**Marge brute totale par culture**")
-        fig1, ax1 = plt.subplots()
-        ax1.bar(df_res["Culture"], df_res["Marge_brute_totale_€"])
-        ax1.set_xlabel("Culture")
-        ax1.set_ylabel("Marge brute totale (€)")
-        ax1.set_title("Marge brute totale par culture")
-        plt.xticks(rotation=45, ha="right")
-        st.pyplot(fig1)
-
-        st.markdown("**Produit /ha vs Charges op /ha**")
-        fig2, ax2 = plt.subplots()
-        largeur = 0.35
-        x = range(len(df_res["Culture"]))
-        ax2.bar([i - largeur/2 for i in x], df_res["Produit_€/ha"], width=largeur, label="Produit €/ha")
-        ax2.bar([i + largeur/2 for i in x], df_res["Charges_op_€/ha"], width=largeur, label="Charges op €/ha")
-        ax2.set_xticks(list(x))
-        ax2.set_xticklabels(df_res["Culture"], rotation=45, ha="right")
-        ax2.set_ylabel("€ / ha")
-        ax2.set_title("Produit vs charges op par ha")
-        ax2.legend()
-        st.pyplot(fig2)
-    else:
-        st.info("➡️ Lance un calcul de marges pour afficher des graphiques.")
-
-
-# ---------------------------------------------------------
-# ONGLET 2 : SYNTHESE EXPLOITATION
-# ---------------------------------------------------------
-with tab_exploit:
-    st.header("🏠 Synthèse simple de l’exploitation")
-
-    st.markdown("Renseigne les grandes masses de ton exploitation pour un diagnostic rapide :")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        produit_total = st.number_input("Produit total (€ / an)", value=300000.0, step=1000.0)
-        charges_op = st.number_input("Charges opérationnelles (€ / an)", value=150000.0, step=1000.0)
-        charges_structure = st.number_input("Charges de structure (€ / an)", value=120000.0, step=1000.0)
-
-    with col2:
-        annuites = st.number_input("Annuités (€ / an)", value=40000.0, step=1000.0)
-        sau_ha = st.number_input("SAU (ha)", value=100.0, step=1.0)
-        uth = st.number_input("Main d’œuvre (UTH)", value=1.0, step=0.1)
-
-    if st.button("📌 Analyser l’exploitation"):
-        df_montants, df_indic, df_com = analyser_exploitation_simple(
-            produit_total=produit_total,
-            charges_op=charges_op,
-            charges_structure=charges_structure,
-            annuites=annuites,
-            sau_ha=sau_ha,
-            uth=uth
-        )
-
-        st.subheader("Montants annuels (€)")
-        st.dataframe(df_montants, use_container_width=True)
-
-        st.subheader("Indicateurs par ha / UTH")
-        st.dataframe(df_indic, use_container_width=True)
-
-        st.subheader("Commentaires automatiques (à discuter avec un conseiller)")
-        st.dataframe(df_com, use_container_width=True)
-
-        st.markdown(
-            "> ⚠️ Ces résultats restent indicatifs. Toujours confronter à un conseiller (Cerfrance, chambre, banquier...)."
-        )
-
-
-# ---------------------------------------------------------
-# ONGLET 3 : CONSEILS CULTURES
-# ---------------------------------------------------------
-with tab_technique:
-    st.header("🧠 Conseils techniques de base par culture")
-
-    culture_choisie = st.selectbox(
-        "Choisis une culture",
-        options=["Blé tendre", "Colza", "Maïs fourrage"]
-    )
-
-    texte_fiche, fiche = get_fiche_culture(culture_choisie)
-    st.text(texte_fiche)
-
-    st.markdown(
-        """
-        💬 Cette partie n’est pas là pour remplacer un technicien,
-        mais pour te rappeler les **bases importantes** à vérifier.
-        """
-    )
-
-
-# ---------------------------------------------------------
-# ONGLET 4 : ELEVAGE & FOURRAGES
-# ---------------------------------------------------------
-with tab_elevage:
-    st.header("🐄 Elevage & stock fourrager (approximation)")
-
-    st.markdown("Estimation simple de ton stock en prairies par rapport aux besoins du troupeau.")
-
-    colg, cold = st.columns(2)
-    with colg:
-        ha_prairie = st.number_input("Ha de prairies productives", value=20.0, step=1.0)
-        rendement_tMS_ha = st.number_input("Rendement moyen (t MS / ha / an)", value=6.0, step=0.5)
-
-    with cold:
-        besoins_kgMS_jour = st.number_input("Besoins totaux du troupeau (kg MS / jour)", value=1500.0, step=50.0)
-        nb_jours = st.number_input("Durée visée (jours)", value=180.0, step=10.0)
-
-    if st.button("🌱 Calculer la couverture fourragère"):
-        prod_tMS, besoins_totaux_kg, couverture_jours = calcul_stock_fourrager(
-            ha_prairie=ha_prairie,
-            rendement_tMS_ha=rendement_tMS_ha,
-            besoins_kgMS_jour=besoins_kgMS_jour,
-            nb_jours=nb_jours
-        )
-
-        st.write(f"✅ Production totale estimée : **{prod_tMS:.1f} t MS**")
-        st.write(f"📌 Besoins sur {nb_jours:.0f} jours : **{besoins_totaux_kg/1000:.1f} t MS**")
-        st.write(f"📆 Couverture théorique : **{couverture_jours:.0f} jours**")
-
-        if couverture_jours < nb_jours:
-            st.warning("⚠️ Couverture insuffisante : risque de manque de fourrage. Envisager d’augmenter la surface, le rendement, ou d’acheter.")
-        else:
-            st.success("👍 A priori, le stock prairies couvre la période visée (à confirmer avec un bilan plus complet).")
-
-
-# ---------------------------------------------------------
-# ONGLET 5 : AIDE & EVOLUTION
-# ---------------------------------------------------------
-with tab_aide:
-    st.header("🧰 Aide, limites & évolution de l’outil")
-
-    st.markdown(
-        f"""
-        ### ℹ️ Ce que fait cette IA agricole
-
-        - Analyse les **marges par culture** à partir :
-          - d’un assolement (PDF ou manuel)
-          - de références de charges (CSV)
-        - Donne une **synthèse économique simple** de l’exploitation (EBE, revenu, €/ha, €/UTH)
-        - Fournit des **rappels techniques de base** sur quelques cultures
-        - Propose un **petit outil fourrager** pour se situer
-
-        ### ⚠️ Ce que l’outil NE FAIT PAS (volontairement)
-
-        - Il ne se propage pas tout seul, ne s’installe nulle part sans toi.
-        - Il ne remplace pas :
-          - un conseiller de gestion
-          - un technicien cultures / élevage
-          - ton banquier / ton comptable
-
-        ### 🔁 Comment tu peux le faire évoluer
-
-        - Ajouter des cultures dans `FICHES_CULTURES` (avec objectifs, sols, points clés)
-        - Ajouter des colonnes dans tes fichiers CSV de références
-        - Modifier les seuils dans l’analyse économique
-        - Créer d’autres onglets (par ex. environnement, irrigation, machinisme…)
-
-        Chaque fois que tu modifies `app.py` sur GitHub :
-        - Streamlit Cloud relancera une nouvelle version
-        - Ton lien restera le même
-        """
-    )
-
-    st.markdown(
-        """
-        💚 Ton objectif “aider les agriculteurs au maximum” est très beau.  
-        Cet outil est une **base solide**. Il ne sera jamais “100% complet”,  
-        mais tu peux l’améliorer petit à petit, comme une ferme qu’on fait évoluer chaque année.
-        """
-    )
+            df_daily = info.get("daily_df")
+            if df_daily is not None:
+                st.subheader("📆 Prévisions sur quelques jours")
+                st.dataframe(df_daily.head(5), use_container_width=True)
+                st.markdown(
+                    "> ℹ️ Ces données viennent d’Open-Meteo (modèle global). "
+                    "Pour des décisions sensibles, croise toujours avec une appli météo locale ou pro."
+                )
+    elif lancer and not localisation:
+        st.info("👉 Saisis d’abord un nom de commune pour afficher la météo.")
