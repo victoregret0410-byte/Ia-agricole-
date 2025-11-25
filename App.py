@@ -76,7 +76,7 @@ LANG_OPTIONS = {
 
 MODEL_OPTIONS = {
     "Groq – précis & rapide (LLaMA 3.1 70B)": {
-        "id": "llama-3.1-70b-versatile",
+        "id": model="llama-3.2-90b-vision-preview",
         "temp": 0.25,
         "max_tokens": 800,
     },
