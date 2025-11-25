@@ -10,22 +10,22 @@ import pdfplumber
 # CONFIG GLOBALE
 # =========================================================
 
-APP_NAME = "💬 Conseiller IA – agricole & général"
-APP_VERSION = "8.0.0"
+APP_NAME = "💬 IA Conseiller – Chat sérieux"
+APP_VERSION = "2.0.0"
 
 st.set_page_config(
     page_title=APP_NAME,
     page_icon="💬",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    layout="centered",  # une seule colonne, comme ChatGPT mobile
 )
 
-# Client Groq (clé dans les secrets Streamlit : GROQ_API_KEY)
-client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+# --------- Client Groq (clé à mettre dans les secrets Streamlit : GROQ_API_KEY) ----------
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
 # =========================================================
-# STYLE GLOBAL – look type ChatGPT, tout blanc
+# STYLE GLOBAL – sobre, propre, type ChatGPT
 # =========================================================
 
 st.markdown(
@@ -41,30 +41,30 @@ st.markdown(
     .block-container {
         padding-top: 1.2rem;
         padding-bottom: 3rem;
-        max-width: 900px;
+        max-width: 780px;
     }
     .stButton>button, .stDownloadButton>button {
         border-radius: 999px;
         padding: 0.35rem 1.2rem;
         font-weight: 600;
     }
-    .chat-title {
-        font-size: 2rem;
+    .app-title {
+        font-size: 1.8rem;
         font-weight: 700;
+        margin-bottom: 0.2rem;
     }
-    .chat-subtitle {
+    .app-subtitle {
         color: #666;
-        font-size: 0.9rem;
-        margin-bottom: 0.6rem;
+        font-size: 0.85rem;
+        margin-bottom: 1rem;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-
 # =========================================================
-# MODES, LANGUES, MODELES
+# MODES, LANGUES, MODÈLES
 # =========================================================
 
 LANG_OPTIONS = {
@@ -74,70 +74,65 @@ LANG_OPTIONS = {
     "Deutsch": "de",
 }
 
-# Modèles Groq (gratuits) – tu peux en ajouter d'autres si tu veux
 MODEL_OPTIONS = {
-    "Groq – rapide (LLaMA 3.2 3B)": {
-        "id": "llama-3.2-3b-instruct",
-        "temp": 0.3,
-        "max_tokens": 500,
-    },
-    "Groq – très précis (LLaMA 3.1 70B)": {
+    "Groq – précis & rapide (LLaMA 3.1 70B)": {
         "id": "llama-3.1-70b-versatile",
         "temp": 0.25,
-        "max_tokens": 900,
+        "max_tokens": 800,
+    },
+    "Groq – léger (LLaMA 3.2 3B)": {
+        "id": "llama-3.2-3b-instruct",
+        "temp": 0.35,
+        "max_tokens": 600,
     },
 }
 
 MODE_PROMPTS = {
-    "Général": """
-Tu es une IA de conversation générale, bienveillante, qui peut parler de n’importe quel sujet
-dans la limite des règles de sécurité. Tu restes respectueuse et neutre.
-Quand tu ne sais pas, tu le dis clairement.
+    "Chat général": """
+Tu es une IA de conversation sérieuse, calme, jamais offensante.
+Tu peux parler de tous les sujets, de façon claire et logique.
+Quand tu ne sais pas, tu le dis franchement.
 """,
     "Conseiller agricole": """
 Tu es un conseiller agricole IA. Tu aides à :
-- raisonner les cultures (assolement, rotations, doses, charges, marges…),
-- gérer les prairies et les stocks fourragers,
-- améliorer l’élevage (bovins, ovins, caprins, volailles…) sur la technique de base,
-- réfléchir au travail, à la sécurité, au confort de vie.
-Tu expliques calmement, comme un collègue agriculteur expérimenté.
+- raisonner les cultures et rotations,
+- réfléchir aux charges, marges, organisation de la ferme,
+- améliorer l'élevage (bovins, ovins, caprins, volailles) sans donner de conseils vétérinaires dangereux,
+- gagner du temps sur les papiers (tableaux, idées de factures, synthèses).
+Tu expliques comme un collègue agriculteur expérimenté, sans jugement.
 """,
     "Gestion & compta": """
-Tu aides à lire les chiffres de l’exploitation : produits, charges, marges, EBE,
-capacité de remboursement. Tu peux proposer des tableaux, des exemples de calcul,
-mais tu ne remplaces pas un expert-comptable ou un conseiller de gestion.
-Tu expliques chaque étape de calcul.
+Tu aides l'utilisateur à comprendre ses chiffres agricoles :
+produits, charges, marges, EBE, remboursement des annuités.
+Tu détailles les calculs étape par étape. Tu restes prudent :
+tu ne remplaces pas un expert-comptable.
 """,
-    "Tech / documents": """
-Tu aides à écrire et améliorer des documents (mails, courriers, rapports),
-créer des modèles de factures, de tableaux, de check-lists, des procédures.
-Tu fais attention à l’orthographe et à la clarté.
+    "Documents & administration": """
+Tu aides à rédiger des textes sérieux : mails, lettres, comptes rendus,
+procédures, fiches de poste. Tu peux proposer des structures de tableaux ou de factures.
+Tu fais attention au ton (respectueux, neutre, professionnel).
 """,
 }
 
 BASE_SYSTEM_PROMPT = """
-Tu es une IA de conversation, toujours calme et respectueuse.
-Tu ne fais jamais de propos offensants, haineux ou discriminants.
-Tu ne donnes pas de conseils dangereux (santé, violence, illégal…).
+Tu es une IA de conversation sérieuse, respectueuse, jamais offensante.
+Interdiction de produire des propos haineux, discriminants, violents
+ou illégaux. Tu refuses toute demande dangereuse.
 
-Tu expliques les choses avec :
-- phrases courtes,
-- vocabulaire simple,
-- structure claire (titres, puces),
-- quelques emojis pour aider à lire (🌾🐄📊💶💡⚠️✅…).
-
-Tu dois privilégier la précision et le raisonnement logique
-plutôt que des réponses vagues ou aléatoires.
-Quand tu donnes un conseil, tu expliques d’abord le raisonnement.
+Style :
+- phrases assez courtes,
+- explications claires, structurées,
+- vocabulaire simple, adapté à un agriculteur ou à un professionnel,
+- tu raisonnes réellement avant de répondre (pas de réponses aléatoires),
+- tu expliques tes étapes de réflexion de manière résumée.
 """
 
-
 # =========================================================
-# OUTILS : lecture fichiers, météo, modèles de tableaux, etc.
+# FONCTIONS OUTILS
 # =========================================================
 
 def lire_csv(file) -> str:
-    """Résumé texte d'un CSV pour le contexte IA (10 lignes max)."""
+    """Résumé texte d'un CSV pour donner du contexte à l'IA."""
     try:
         df = pd.read_csv(file)
     except Exception:
@@ -176,7 +171,7 @@ def generer_modele_facture_df():
         "SIRET / TVA client": [""],
         "Description": [""],
         "Quantité": [0],
-        "Unité": [""],  # t, kg, h, u...
+        "Unité": [""],
         "Prix unitaire HT": [0.0],
         "TVA (%)": [20],
         "Total HT": [0.0],
@@ -217,19 +212,20 @@ def generer_modeles_tableaux_gestion():
 def get_meteo_precise(location: str, nb_villes: int = 5):
     """
     Météo précise via Open-Meteo :
-    - cherche plusieurs villes proches (nb_villes),
+    - cherche plusieurs villes proches,
     - renvoie la météo détaillée pour la première
-      + une liste de villes proches à comparer.
+      + la liste des villes trouvées.
     """
     if not location:
         return None, None, "Aucune localisation fournie."
+
     try:
         geo_url = "https://geocoding-api.open-meteo.com/v1/search"
         params_geo = {
             "name": location,
             "count": nb_villes,
             "language": "fr",
-            "format": "json"
+            "format": "json",
         }
         r_geo = requests.get(geo_url, params=params_geo, timeout=8)
         if r_geo.status_code != 200:
@@ -237,9 +233,8 @@ def get_meteo_precise(location: str, nb_villes: int = 5):
 
         data_geo = r_geo.json()
         if "results" not in data_geo or not data_geo["results"]:
-            return None, None, f"Aucune localisation trouvée pour « {location} »."
+            return None, None, f"Aucune ville trouvée pour « {location} »."
 
-        # Liste des villes proposées
         villes = pd.DataFrame([{
             "Nom": r["name"],
             "Pays": r.get("country", ""),
@@ -247,7 +242,6 @@ def get_meteo_precise(location: str, nb_villes: int = 5):
             "Lon": r["longitude"],
         } for r in data_geo["results"]])
 
-        # On prend la première pour la météo détaillée
         loc = data_geo["results"][0]
         lat = loc["latitude"]
         lon = loc["longitude"]
@@ -261,7 +255,7 @@ def get_meteo_precise(location: str, nb_villes: int = 5):
             "hourly": "temperature_2m,precipitation",
             "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
             "current_weather": "true",
-            "timezone": "auto"
+            "timezone": "auto",
         }
         r_met = requests.get(meteo_url, params=params_met, timeout=8)
         if r_met.status_code != 200:
@@ -286,7 +280,7 @@ def get_meteo_precise(location: str, nb_villes: int = 5):
             "nom": nom,
             "pays": pays,
             "current": current,
-            "daily_df": df_daily
+            "daily_df": df_daily,
         }
         return info, villes, None
     except Exception as e:
@@ -294,149 +288,223 @@ def get_meteo_precise(location: str, nb_villes: int = 5):
 
 
 # =========================================================
-# ÉTAT : multi-conversations type ChatGPT
+# ÉTAT DE SESSION : une seule conversation principale
 # =========================================================
 
-if "conversations" not in st.session_state:
-    st.session_state.conversations = []
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Bonjour 👋\n\nJe suis ton IA conseillère. Explique-moi ta situation ou ta question."}
+    ]
 
-if "current_index" not in st.session_state:
-    st.session_state.current_index = 0
-
-
-def creer_nouvelle_conversation(title: str, mode: str, lang: str, model_label: str):
-    conv = {
-        "title": title,
-        "mode": mode,
-        "lang": lang,
-        "model": model_label,
-        "messages": [
-            {
-                "role": "assistant",
-                "content": "Salut 👋\n\nExplique-moi ta situation, on va regarder ça calmement."
-            }
-        ],
-        "fichiers_contextes": [],
-    }
-    st.session_state.conversations.append(conv)
-    st.session_state.current_index = len(st.session_state.conversations) - 1
-
-
-# Première discussion par défaut
-if not st.session_state.conversations:
-    creer_nouvelle_conversation(
-        "Discussion 1",
-        "Général",
-        "Français",
-        "Groq – très précis (LLaMA 3.1 70B)",
-    )
+if "file_context" not in st.session_state:
+    st.session_state.file_context = []  # extraits de fichiers
 
 
 # =========================================================
-# SIDEBAR : langues, modes, modèles, listes de chats
+# SIDEBAR : réglages globaux
 # =========================================================
 
 with st.sidebar:
-    st.markdown("### 💬 Conseiller IA")
+    st.markdown("### ⚙️ Réglages du chat")
     st.caption(f"Version {APP_VERSION}")
 
-    lang_choice = st.selectbox("Langue :", list(LANG_OPTIONS.keys()))
-    mode_choice = st.selectbox("Mode :", list(MODE_PROMPTS.keys()))
-    model_choice = st.selectbox("Version d’IA :", list(MODEL_OPTIONS.keys()))
+    langue = st.selectbox("Langue de réponse :", list(LANG_OPTIONS.keys()), index=0)
+    mode = st.selectbox("Mode :", list(MODE_PROMPTS.keys()), index=1)
+    modele_label = st.selectbox("Modèle IA :", list(MODEL_OPTIONS.keys()), index=0)
 
-    st.markdown("---")
-    if st.button("➕ Nouvelle discussion"):
-        titre = f"{mode_choice} – {lang_choice} #{len(st.session_state.conversations) + 1}"
-        creer_nouvelle_conversation(titre, mode_choice, lang_choice, model_choice)
-
-    st.markdown("##### Mes discussions")
-    labels = [c["title"] for c in st.session_state.conversations]
-    idx = st.session_state.current_index
-    if idx >= len(labels):
-        idx = len(labels) - 1
-    selected = st.radio(
-        "",
-        options=list(range(len(labels))),
-        format_func=lambda i: labels[i],
-        index=idx,
-    )
-    st.session_state.current_index = selected
+    if st.button("🔄 Réinitialiser la discussion"):
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Nouvelle discussion. Explique-moi ta situation."}
+        ]
+        st.session_state.file_context = []
+        st.experimental_rerun()
 
     st.markdown("---")
     st.markdown(
-        "ℹ️ L’IA utilise **Groq** (modèles LLaMA) : rapide et gratuit.\n"
-        "Pour plus de précision, choisis le modèle 70B."
+        "L’IA utilise **Groq** (modèles LLaMA) : rapide et précis.\n\n"
+        "Tu peux déposer des fichiers et demander de l’aide sur les chiffres ou les papiers."
     )
 
-# Conversation active
-conv = st.session_state.conversations[st.session_state.current_index]
-
-# On synchronise ce que l’utilisateur a choisi dans la sidebar
-conv["mode"] = mode_choice
-conv["lang"] = lang_choice
-conv["model"] = model_choice
-
-
 # =========================================================
-# CONSTRUCTION DES MESSAGES POUR L’IA
+# FONCTION : construire messages pour l’IA
 # =========================================================
 
-def construire_messages(conv):
-    lang_code = LANG_OPTIONS.get(conv["lang"], "fr")
-    mode_prompt = MODE_PROMPTS.get(conv["mode"], "")
+def construire_messages():
+    lang_code = LANG_OPTIONS.get(langue, "fr")
+    mode_prompt = MODE_PROMPTS.get(mode, "")
 
     messages = [
         {"role": "system", "content": BASE_SYSTEM_PROMPT},
-        {
-            "role": "system",
-            "content": f"La langue de réponse doit être : {conv['lang']} (code {lang_code})."
-        },
+        {"role": "system", "content": f"Réponds en langue : {langue} (code {lang_code})."},
         {"role": "system", "content": mode_prompt},
     ]
 
-    # Contexte fichiers (2 derniers seulement pour aller vite)
-    if conv["fichiers_contextes"]:
-        ctx = conv["fichiers_contextes"][-2:]
+    if st.session_state.file_context:
         contexte_text = (
             "Voici des extraits de documents fournis par l’utilisateur "
             "(tableaux, PDF, etc.). Utilise-les si c’est utile :\n\n"
-            + "\n\n---\n\n".join(ctx)
+            + "\n\n---\n\n".join(st.session_state.file_context[-3:])
         )
         messages.append({"role": "system", "content": contexte_text})
 
-    # 10 derniers messages
-    derniers = conv["messages"][-10:]
-    for m in derniers:
-        if m["role"] in ["user", "assistant"]:
+    dernier_messages = st.session_state.messages[-10:]
+    for m in dernier_messages:
+        if m["role"] in ("user", "assistant"):
             messages.append({"role": m["role"], "content": m["content"]})
 
     return messages
 
 
-def appeler_modele(conv):
-    model_conf = MODEL_OPTIONS[conv["model"]]
-    messages_for_api = construire_messages(conv)
+def appeler_groq():
+    if client is None:
+        return (
+            "❌ Je ne peux pas répondre pour l’instant.\n\n"
+            "La clé `GROQ_API_KEY` n'est pas configurée dans les *Secrets* Streamlit."
+        )
+
+    model_conf = MODEL_OPTIONS[modele_label]
+    msgs = construire_messages()
 
     try:
         completion = client.chat.completions.create(
             model=model_conf["id"],
-            messages=messages_for_api,
+            messages=msgs,
             temperature=model_conf["temp"],
             max_tokens=model_conf["max_tokens"],
         )
         return completion.choices[0].message.content
     except Exception as e:
-        msg = str(e)
-        if "api_key" in msg.lower() or "authentication" in msg.lower():
-            return (
-                "❌ Je ne peux pas répondre car la **clé GROQ_API_KEY** n’est pas valide.\n\n"
-                "Va dans les *Secrets* Streamlit et vérifie que tu as bien :\n"
-                '`GROQ_API_KEY = "gsk_........"`'
-            )
-        return (
-            "❌ Impossible de contacter le modèle Groq pour l’instant.\n\n"
-            f"(Détail technique : {e})"
-        )
+        return f"❌ Erreur lors de l'appel au modèle Groq : {e}"
 
 
 # =========================================================
+# HEADER
+# =========================================================
+
+st.markdown("<div class='app-title'>💬 IA Conseiller – Chat sérieux</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='app-subtitle'>Une seule interface pour discuter, analyser tes chiffres, t'aider sur les papiers et la météo.</div>",
+    unsafe_allow_html=True,
+)
+st.markdown("---")
+
+# =========================================================
+# AFFICHAGE DE LA CONVERSATION
+# =========================================================
+
+for message in st.session_state.messages:
+    with st.chat_message("assistant" if message["role"] == "assistant" else "user"):
+        st.markdown(message["content"])
+
+# Champ de saisie
+user_input = st.chat_input("Écris ta question ou ta situation ici…")
+
+if user_input:
+    texte = user_input.strip()
+    if texte:
+        st.session_state.messages.append({"role": "user", "content": texte})
+        with st.chat_message("user"):
+            st.markdown(texte)
+
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            placeholder.markdown("Je réfléchis à ta situation…")
+            answer = appeler_groq()
+            placeholder.markdown(answer)
+
+        st.session_state.messages.append({"role": "assistant", "content": answer})
+
+# =========================================================
+# OUTILS : fichiers, factures, tableaux, météo
+# =========================================================
+
+st.markdown("---")
+st.markdown("### 🧰 Outils pratiques (optionnel)")
+
+with st.expander("📂 Fichiers (PDF / CSV) à analyser", expanded=False):
+    uploaded_files = st.file_uploader(
+        "Dépose ici tes dossiers, tableaux, relevés (PDF ou CSV) :",
+        type=["pdf", "csv"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files and st.button("Analyser les fichiers"):
+        resumes = []
+        for f in uploaded_files:
+            try:
+                data = f.read()
+                if f.name.lower().endswith(".csv"):
+                    resume = lire_csv(io.BytesIO(data))
+                else:
+                    resume = lire_pdf(io.BytesIO(data))
+                resumes.append(resume)
+            except Exception as e:
+                resumes.append(f"Impossible de lire le fichier {f.name} : {e}")
+
+        st.session_state.file_context.extend(resumes)
+        st.success("Fichiers analysés. L’IA en tiendra compte dans ses prochaines réponses.")
+        for r in resumes:
+            st.code(r[:1200])
+
+with st.expander("🧾 Modèles de factures & tableaux de gestion", expanded=False):
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🧾 Modèle de facture"):
+            df_fact = generer_modele_facture_df()
+            st.dataframe(df_fact, use_container_width=True)
+            csv_fact = df_fact.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Télécharger facture.csv",
+                data=csv_fact,
+                file_name="modele_facture.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+    with col2:
+        if st.button("📊 Modèles de tableaux de gestion"):
+            modeles = generer_modeles_tableaux_gestion()
+            for nom, df_mod in modeles.items():
+                st.markdown(f"**{nom}**")
+                st.dataframe(df_mod, use_container_width=True)
+                csv_mod = df_mod.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    f"📥 Télécharger {nom}.csv",
+                    data=csv_mod,
+                    file_name=f"{nom}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+with st.expander("🌦️ Météo très précise (plusieurs villes)", expanded=False):
+    loc = st.text_input("Ville / commune :", placeholder="Ex : Lisieux, Alençon, Limoges…")
+    if st.button("Voir la météo"):
+        info, villes_df, err = get_meteo_precise(loc)
+        if err:
+            st.error(err)
+        else:
+            if villes_df is not None and not villes_df.empty:
+                st.markdown("**Villes trouvées :**")
+                st.dataframe(villes_df, use_container_width=True)
+
+            if info is None:
+                st.error("Impossible de récupérer la météo détaillée.")
+            else:
+                st.success(f"Météo pour {info['nom']} ({info['pays']})")
+                current = info.get("current", {})
+                if current:
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.metric("Température (°C)", current.get("temperature", "NA"))
+                    with c2:
+                        st.metric("Vent (km/h)", current.get("windspeed", "NA"))
+                    with c3:
+                        st.metric("Code météo", current.get("weathercode", "NA"))
+
+                df_daily = info.get("daily_df")
+                if df_daily is not None:
+                    st.markdown("**Prévisions 5 jours :**")
+                    st.dataframe(df_daily.head(5), use_container_width=True)
+                    st.caption(
+                        "Source : Open-Meteo. Pour les décisions sensibles "
+                        "(récolte, traitements), croise avec une appli météo locale."
+                    )
