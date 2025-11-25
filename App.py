@@ -1,16 +1,17 @@
 import streamlit as st
-from openai import OpenAI
+from groq import Groq
 import pandas as pd
 import pdfplumber
 import io
 import requests
+import os
 
 # =========================================================
 # CONFIG GLOBALE
 # =========================================================
 
 APP_NAME = "🌾 IA agricole – Chat rapide"
-APP_VERSION = "5.1.0"
+APP_VERSION = "6.0.0"
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -19,7 +20,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-client = OpenAI()  # nécessite OPENAI_API_KEY dans les secrets Streamlit
+# Client Groq (clé dans les secrets Streamlit : GROQ_API_KEY)
+client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
 
 
 # =========================================================
@@ -377,8 +379,6 @@ def construire_messages_pour_ia(conv, style_reponse: str):
     # on prend seulement les 8 derniers messages
     derniers = conv["messages"][-8:]
     for m in derniers:
-        # on mappe au format 'user' / 'assistant'
-        # (on ne stocke jamais 'system' ici)
         role = m["role"]
         if role not in ["user", "assistant"]:
             continue
@@ -443,25 +443,33 @@ with col_chat:
 
         messages_for_api = construire_messages_pour_ia(conv, style_reponse)
 
-        # Appel modèle ultra rapide : gpt-4.1-mini + tokens limités
+        # Appel modèle ultra rapide : Groq / llama-3.1-8b-instant
         with st.chat_message("assistant"):
             placeholder = st.empty()
             placeholder.markdown("Je réfléchis à ta situation… ⏳")
 
             try:
-                response = client.responses.create(
-                    model="gpt-4.1-mini",
-                    input=messages_for_api,
+                completion = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=messages_for_api,
                     temperature=0.3,
-                    max_output_tokens=400,  # limite la taille pour plus de vitesse
+                    max_tokens=400,
                 )
-                answer = response.output[0].content[0].text.value
+                answer = completion.choices[0].message.content
             except Exception as e:
-                answer = (
-                    "❌ Impossible de contacter le modèle pour l’instant.\n\n"
-                    "Vérifie que ta clé `OPENAI_API_KEY` est bien configurée dans Streamlit.\n\n"
-                    f"Détail technique : {e}"
-                )
+                msg = str(e)
+                if "invalid_api_key" in msg or "authentication" in msg.lower():
+                    answer = (
+                        "❌ Je ne peux pas répondre car la **clé GROQ_API_KEY** n’est pas valide.\n\n"
+                        "➡️ Va dans les *Secrets* Streamlit et vérifie que tu as bien :\n"
+                        "`GROQ_API_KEY = \"ta_cle_groq_ici\"`.\n"
+                    )
+                else:
+                    answer = (
+                        "❌ Impossible de contacter le modèle Groq pour l’instant.\n\n"
+                        "Vérifie ta connexion internet et ta clé `GROQ_API_KEY`.\n\n"
+                        f"(Détail technique : {e})"
+                    )
 
             placeholder.markdown(answer)
 
@@ -496,68 +504,4 @@ with col_tools:
 
         conv["fichiers_contextes"].extend(resumes)
         st.session_state.conversations[st.session_state.current_conv_index] = conv
-        st.success("Fichiers analysés. L’IA tiendra compte de ces infos.")
-        for r in resumes:
-            st.code(r[:1500])
-
-    st.markdown("---")
-    st.markdown("### 🧾 Factures & tableaux")
-
-    if st.button("🧾 Modèle de facture"):
-        df_fact = generer_modele_facture_df()
-        st.markdown("Modèle de facture agricole :")
-        st.dataframe(df_fact, use_container_width=True)
-        csv_fact = df_fact.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "📥 Télécharger le modèle (CSV)",
-            data=csv_fact,
-            file_name="modele_facture_agricole.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    if st.button("📊 Modèles de tableaux de gestion"):
-        modeles = generer_modeles_tableaux_gestion()
-        for nom, df_mod in modeles.items():
-            st.markdown(f"**{nom}**")
-            st.dataframe(df_mod, use_container_width=True)
-            csv_mod = df_mod.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                f"📥 Télécharger {nom}.csv",
-                data=csv_mod,
-                file_name=f"{nom}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-
-    if st.button("📈 Idées de schémas pour la ferme"):
-        st.markdown(texte_idees_schemas())
-
-    st.markdown("---")
-    st.markdown("### 🌦️ Mini météo agricole")
-
-    loc = st.text_input("Commune / ville", placeholder="Ex : Rouen, Limoges…")
-    if st.button("Voir la météo"):
-        info, err = get_meteo(loc)
-        if err:
-            st.error(err)
-        elif not info:
-            st.error("Impossible de récupérer la météo.")
-        else:
-            st.success(f"Météo pour {info['nom']} ({info['pays']})")
-            current = info.get("current", {})
-            if current:
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    st.metric("Température (°C)", current.get("temperature", "NA"))
-                with c2:
-                    st.metric("Vent (km/h)", current.get("windspeed", "NA"))
-                with c3:
-                    st.metric("Code météo", current.get("weathercode", "NA"))
-
-            df_daily = info.get("daily_df")
-            if df_daily is not None:
-                st.dataframe(df_daily.head(5), use_container_width=True)
-                st.caption(
-                    "💡 Météo issue d’Open-Meteo. Pour des décisions sensibles, croise avec une appli météo locale."
-                )
+        st.success("Fichiers analysés. L’IA tiendra compte de ces
