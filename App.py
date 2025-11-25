@@ -1,21 +1,21 @@
+import os
+import io
+import requests
 import streamlit as st
 from groq import Groq
 import pandas as pd
 import pdfplumber
-import io
-import requests
-import os
 
 # =========================================================
 # CONFIG GLOBALE
 # =========================================================
 
-APP_NAME = "🌾 IA agricole – Chat rapide"
-APP_VERSION = "6.0.0"
+APP_NAME = "💬 Conseiller IA – agricole & général"
+APP_VERSION = "8.0.0"
 
 st.set_page_config(
     page_title=APP_NAME,
-    page_icon="🌾",
+    page_icon="💬",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -25,28 +25,7 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
 
 
 # =========================================================
-# SYSTEM PROMPT (CERVEAU GÉNÉRAL)
-# =========================================================
-
-BASE_SYSTEM_PROMPT = """
-Tu es un conseiller agricole IA francophone, bienveillant, jamais offensant.
-Tu aides les agriculteurs à :
-- mieux gérer leurs cultures, prairies, élevage (bovin, ovin, caprin, porc, volaille…),
-- réfléchir à leur organisation de travail,
-- comprendre leurs chiffres (produits, charges, marges, EBE…),
-- gagner du temps sur les papiers (factures, tableaux, relevés…),
-- penser leurs investissements avec prudence (sans faire de conseil financier risqué).
-
-Style :
-- français simple, ton humain, sans jugement,
-- phrases courtes, claires, concrètes,
-- tu expliques comme à un collègue agriculteur,
-- tu utilises quelques emojis pour structurer (🌾🐄📊💶💡⚠️✅…),
-- tu restes toujours respectueux, jamais offensant.
-"""
-
-# =========================================================
-# STYLE GLOBAL
+# STYLE GLOBAL – look type ChatGPT, tout blanc
 # =========================================================
 
 st.markdown(
@@ -54,25 +33,107 @@ st.markdown(
     <style>
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-    }
-    body {
-        background-color: #f5f7fb;
+        background-color: #ffffff;
     }
     .main {
-        background: #f5f7fb;
+        background-color: #ffffff;
+    }
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 3rem;
+        max-width: 900px;
     }
     .stButton>button, .stDownloadButton>button {
         border-radius: 999px;
         padding: 0.35rem 1.2rem;
         font-weight: 600;
     }
+    .chat-title {
+        font-size: 2rem;
+        font-weight: 700;
+    }
+    .chat-subtitle {
+        color: #666;
+        font-size: 0.9rem;
+        margin-bottom: 0.6rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+
 # =========================================================
-# FONCTIONS UTILITAIRES
+# MODES, LANGUES, MODELES
+# =========================================================
+
+LANG_OPTIONS = {
+    "Français": "fr",
+    "English": "en",
+    "Español": "es",
+    "Deutsch": "de",
+}
+
+# Modèles Groq (gratuits) – tu peux en ajouter d'autres si tu veux
+MODEL_OPTIONS = {
+    "Groq – rapide (LLaMA 3.2 3B)": {
+        "id": "llama-3.2-3b-instruct",
+        "temp": 0.3,
+        "max_tokens": 500,
+    },
+    "Groq – très précis (LLaMA 3.1 70B)": {
+        "id": "llama-3.1-70b-versatile",
+        "temp": 0.25,
+        "max_tokens": 900,
+    },
+}
+
+MODE_PROMPTS = {
+    "Général": """
+Tu es une IA de conversation générale, bienveillante, qui peut parler de n’importe quel sujet
+dans la limite des règles de sécurité. Tu restes respectueuse et neutre.
+Quand tu ne sais pas, tu le dis clairement.
+""",
+    "Conseiller agricole": """
+Tu es un conseiller agricole IA. Tu aides à :
+- raisonner les cultures (assolement, rotations, doses, charges, marges…),
+- gérer les prairies et les stocks fourragers,
+- améliorer l’élevage (bovins, ovins, caprins, volailles…) sur la technique de base,
+- réfléchir au travail, à la sécurité, au confort de vie.
+Tu expliques calmement, comme un collègue agriculteur expérimenté.
+""",
+    "Gestion & compta": """
+Tu aides à lire les chiffres de l’exploitation : produits, charges, marges, EBE,
+capacité de remboursement. Tu peux proposer des tableaux, des exemples de calcul,
+mais tu ne remplaces pas un expert-comptable ou un conseiller de gestion.
+Tu expliques chaque étape de calcul.
+""",
+    "Tech / documents": """
+Tu aides à écrire et améliorer des documents (mails, courriers, rapports),
+créer des modèles de factures, de tableaux, de check-lists, des procédures.
+Tu fais attention à l’orthographe et à la clarté.
+""",
+}
+
+BASE_SYSTEM_PROMPT = """
+Tu es une IA de conversation, toujours calme et respectueuse.
+Tu ne fais jamais de propos offensants, haineux ou discriminants.
+Tu ne donnes pas de conseils dangereux (santé, violence, illégal…).
+
+Tu expliques les choses avec :
+- phrases courtes,
+- vocabulaire simple,
+- structure claire (titres, puces),
+- quelques emojis pour aider à lire (🌾🐄📊💶💡⚠️✅…).
+
+Tu dois privilégier la précision et le raisonnement logique
+plutôt que des réponses vagues ou aléatoires.
+Quand tu donnes un conseil, tu expliques d’abord le raisonnement.
+"""
+
+
+# =========================================================
+# OUTILS : lecture fichiers, météo, modèles de tableaux, etc.
 # =========================================================
 
 def lire_csv(file) -> str:
@@ -106,13 +167,13 @@ def lire_pdf(file) -> str:
 
 
 def generer_modele_facture_df():
-    """Modèle simple de facture agricole."""
+    """Modèle simple de facture (agricole ou autre)."""
     return pd.DataFrame({
         "Date": [""],
         "N° facture": [""],
         "Client": [""],
         "Adresse client": [""],
-        "SIRET client": [""],
+        "SIRET / TVA client": [""],
         "Description": [""],
         "Quantité": [0],
         "Unité": [""],  # t, kg, h, u...
@@ -126,7 +187,7 @@ def generer_modele_facture_df():
 
 
 def generer_modeles_tableaux_gestion():
-    """Quelques modèles de tableaux utiles (marges, trésorerie, élevage)."""
+    """Modèles de tableaux utiles pour une ferme."""
     df_marges = pd.DataFrame(columns=[
         "Année", "Atelier / Culture", "Surface_ha / Nb têtes",
         "Produit total €", "Charges opérationnelles €",
@@ -135,55 +196,58 @@ def generer_modeles_tableaux_gestion():
     ])
 
     df_tresorerie = pd.DataFrame(columns=[
-        "Date", "Type", "Catégorie", "Libellé",
-        "Montant €", "Sens",
-        "Moyen de paiement", "Atelier", "Observation"
+        "Date", "Type (encaissement / décaissement)", "Catégorie",
+        "Libellé", "Montant €", "Moyen de paiement", "Atelier", "Observation"
     ])
 
     df_elevage = pd.DataFrame(columns=[
         "Année", "Espèce", "Atelier", "Nb animaux moyen",
         "GMQ (g/j) ou Prod. lait (kg/VL/an)",
-        "IC / conso concentrés (kg/an)", "Taux de renouvellement (%)",
+        "Conso concentrés (kg/an)", "Taux de renouvellement (%)",
         "Taux de mortalité (%)", "Remarques techniques"
     ])
 
     return {
         "Suivi_marges": df_marges,
         "Trésorerie": df_tresorerie,
-        "Elevage": df_elevage
+        "Elevage": df_elevage,
     }
 
 
-def texte_idees_schemas():
-    return (
-        "📈 **Idées de schémas pour organiser la ferme**\n\n"
-        "1️⃣ Rotation des cultures\n"
-        "2️⃣ Organisation du travail (quotidien / hebdo / saison)\n"
-        "3️⃣ Flux en bâtiment (entrée → zones → sortie)\n\n"
-        "Tu peux les dessiner sur papier ou dans Canva/PowerPoint."
-    )
-
-
-def get_meteo(location: str):
-    """Mini météo via Open-Meteo."""
+def get_meteo_precise(location: str, nb_villes: int = 5):
+    """
+    Météo précise via Open-Meteo :
+    - cherche plusieurs villes proches (nb_villes),
+    - renvoie la météo détaillée pour la première
+      + une liste de villes proches à comparer.
+    """
     if not location:
-        return None, "Aucune localisation fournie."
+        return None, None, "Aucune localisation fournie."
     try:
         geo_url = "https://geocoding-api.open-meteo.com/v1/search"
         params_geo = {
             "name": location,
-            "count": 1,
+            "count": nb_villes,
             "language": "fr",
             "format": "json"
         }
         r_geo = requests.get(geo_url, params=params_geo, timeout=8)
         if r_geo.status_code != 200:
-            return None, "Impossible de joindre le service de géocodage météo."
+            return None, None, "Impossible de joindre le service de géocodage météo."
 
         data_geo = r_geo.json()
         if "results" not in data_geo or not data_geo["results"]:
-            return None, f"Aucune localisation trouvée pour '{location}'."
+            return None, None, f"Aucune localisation trouvée pour « {location} »."
 
+        # Liste des villes proposées
+        villes = pd.DataFrame([{
+            "Nom": r["name"],
+            "Pays": r.get("country", ""),
+            "Lat": r["latitude"],
+            "Lon": r["longitude"],
+        } for r in data_geo["results"]])
+
+        # On prend la première pour la météo détaillée
         loc = data_geo["results"][0]
         lat = loc["latitude"]
         lon = loc["longitude"]
@@ -201,7 +265,7 @@ def get_meteo(location: str):
         }
         r_met = requests.get(meteo_url, params=params_met, timeout=8)
         if r_met.status_code != 200:
-            return None, "Impossible de joindre le service météo."
+            return None, villes, "Impossible de joindre le service météo."
 
         data_met = r_met.json()
         current = data_met.get("current_weather", {})
@@ -224,284 +288,155 @@ def get_meteo(location: str):
             "current": current,
             "daily_df": df_daily
         }
-        return info, None
+        return info, villes, None
     except Exception as e:
-        return None, f"Erreur météo : {e}"
+        return None, None, f"Erreur météo : {e}"
 
 
 # =========================================================
-# ÉTAT : MULTI CONVERSATIONS (COMME CHATGPT)
+# ÉTAT : multi-conversations type ChatGPT
 # =========================================================
 
 if "conversations" not in st.session_state:
-    st.session_state.conversations = []  # liste de dict
-if "current_conv_index" not in st.session_state:
-    st.session_state.current_conv_index = 0
+    st.session_state.conversations = []
+
+if "current_index" not in st.session_state:
+    st.session_state.current_index = 0
 
 
-def creer_nouvelle_conversation(style: str = "general"):
-    """Crée une nouvelle discussion avec un type (général, élevage, compta)."""
-    if style == "elevage":
-        titre = f"Élevage {len(st.session_state.conversations) + 1}"
-        intro = (
-            "On se concentre sur **l’élevage** (bovins, ovins, caprins, volailles…).\n\n"
-            "Tu peux me parler de rations, bâtiments, reproduction, santé, organisation…"
-        )
-    elif style == "compta":
-        titre = f"Compta {len(st.session_state.conversations) + 1}"
-        intro = (
-            "On se concentre sur **la gestion / compta** 📊💶.\n\n"
-            "Donne-moi tes produits, charges, annuités… je t’aide à les lire et analyser."
-        )
-    else:
-        style = "general"
-        titre = f"Discussion {len(st.session_state.conversations) + 1}"
-        intro = (
-            "Salut 👋\n\n"
-            "Tu peux me parler de ta ferme, de tes cultures, de ton élevage, "
-            "de ton organisation ou de tes papiers. On regarde ça calmement."
-        )
-
+def creer_nouvelle_conversation(title: str, mode: str, lang: str, model_label: str):
     conv = {
-        "title": titre,
-        "type": style,  # general / elevage / compta
+        "title": title,
+        "mode": mode,
+        "lang": lang,
+        "model": model_label,
         "messages": [
-            {"role": "assistant", "content": intro},
+            {
+                "role": "assistant",
+                "content": "Salut 👋\n\nExplique-moi ta situation, on va regarder ça calmement."
+            }
         ],
         "fichiers_contextes": [],
     }
     st.session_state.conversations.append(conv)
-    st.session_state.current_conv_index = len(st.session_state.conversations) - 1
+    st.session_state.current_index = len(st.session_state.conversations) - 1
 
 
-# Première conversation au démarrage
+# Première discussion par défaut
 if not st.session_state.conversations:
-    creer_nouvelle_conversation("general")
+    creer_nouvelle_conversation(
+        "Discussion 1",
+        "Général",
+        "Français",
+        "Groq – très précis (LLaMA 3.1 70B)",
+    )
 
 
 # =========================================================
-# BARRE LATÉRALE (LISTE DES CHATS)
+# SIDEBAR : langues, modes, modèles, listes de chats
 # =========================================================
 
 with st.sidebar:
-    st.markdown("### 🌾 IA agricole – Chats")
+    st.markdown("### 💬 Conseiller IA")
     st.caption(f"Version {APP_VERSION}")
 
-    st.markdown("#### ➕ Nouvelle discussion")
-    c_new1, c_new2, c_new3 = st.columns(3)
-    with c_new1:
-        if st.button("Général"):
-            creer_nouvelle_conversation("general")
-    with c_new2:
-        if st.button("Élevage"):
-            creer_nouvelle_conversation("elevage")
-    with c_new3:
-        if st.button("Compta"):
-            creer_nouvelle_conversation("compta")
+    lang_choice = st.selectbox("Langue :", list(LANG_OPTIONS.keys()))
+    mode_choice = st.selectbox("Mode :", list(MODE_PROMPTS.keys()))
+    model_choice = st.selectbox("Version d’IA :", list(MODEL_OPTIONS.keys()))
 
     st.markdown("---")
+    if st.button("➕ Nouvelle discussion"):
+        titre = f"{mode_choice} – {lang_choice} #{len(st.session_state.conversations) + 1}"
+        creer_nouvelle_conversation(titre, mode_choice, lang_choice, model_choice)
 
-    labels = [conv["title"] for conv in st.session_state.conversations]
-    idx = st.session_state.current_conv_index
+    st.markdown("##### Mes discussions")
+    labels = [c["title"] for c in st.session_state.conversations]
+    idx = st.session_state.current_index
     if idx >= len(labels):
         idx = len(labels) - 1
-
     selected = st.radio(
-        "Mes discussions",
+        "",
         options=list(range(len(labels))),
         format_func=lambda i: labels[i],
         index=idx,
     )
-    st.session_state.current_conv_index = selected
+    st.session_state.current_index = selected
 
     st.markdown("---")
     st.markdown(
-        "**💡 Astuce :** une discussion = un sujet (élevage, compta, projet…).\n"
-        "Tu peux en créer plusieurs et revenir dessus."
+        "ℹ️ L’IA utilise **Groq** (modèles LLaMA) : rapide et gratuit.\n"
+        "Pour plus de précision, choisis le modèle 70B."
     )
 
+# Conversation active
+conv = st.session_state.conversations[st.session_state.current_index]
 
-# Conversation courante
-conv = st.session_state.conversations[st.session_state.current_conv_index]
-
-
-# =========================================================
-# COULEURS SELON TYPE DE DISCUSSION
-# =========================================================
-
-def couleurs_par_type(t: str):
-    if t == "elevage":
-        return "#e4f5e9", "#f6fffa", "#ffffff", "#2e7d32"
-    if t == "compta":
-        return "#e3f2fd", "#f5fbff", "#ffffff", "#1565c0"
-    # général
-    return "#fff7e3", "#fffdf7", "#ffffff", "#d7961b"
-
-
-grad_start, grad_mid, grad_end, accent = couleurs_par_type(conv.get("type", "general"))
-
-st.markdown(
-    f"""
-    <style>
-    .block-container {{
-        background: linear-gradient(
-            135deg,
-            {grad_start} 0%,
-            {grad_mid} 55%,
-            {grad_end} 100%
-        );
-        padding-top: 1.2rem;
-        padding-bottom: 3rem;
-    }}
-    h1, h2, h3, h4 {{
-        color: {accent};
-    }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# On synchronise ce que l’utilisateur a choisi dans la sidebar
+conv["mode"] = mode_choice
+conv["lang"] = lang_choice
+conv["model"] = model_choice
 
 
 # =========================================================
-# FONCTION POUR CONSTRUIRE LES MESSAGES (RAPIDE)
+# CONSTRUCTION DES MESSAGES POUR L’IA
 # =========================================================
 
-def construire_messages_pour_ia(conv, style_reponse: str):
-    """
-    Pour aller vite : on envoie seulement :
-    - le system prompt,
-    - les 8 derniers messages de la conversation,
-    - les 2 derniers contextes fichiers (si présents),
-    + une consigne de style.
-    """
-    messages = [{"role": "system", "content": BASE_SYSTEM_PROMPT}]
+def construire_messages(conv):
+    lang_code = LANG_OPTIONS.get(conv["lang"], "fr")
+    mode_prompt = MODE_PROMPTS.get(conv["mode"], "")
 
-    # on prend seulement les 8 derniers messages
-    derniers = conv["messages"][-8:]
-    for m in derniers:
-        role = m["role"]
-        if role not in ["user", "assistant"]:
-            continue
-        messages.append({"role": role, "content": m["content"]})
-
-    # style de réponse
-    if style_reponse == "Rapide et synthétique":
-        messages.append({
+    messages = [
+        {"role": "system", "content": BASE_SYSTEM_PROMPT},
+        {
             "role": "system",
-            "content": "Réponds de façon claire, concrète et assez courte (2 à 4 paragraphes max)."
-        })
-    else:
-        messages.append({
-            "role": "system",
-            "content": "Tu peux donner un peu plus de détails, tout en restant simple et structuré."
-        })
+            "content": f"La langue de réponse doit être : {conv['lang']} (code {lang_code})."
+        },
+        {"role": "system", "content": mode_prompt},
+    ]
 
-    # contexte fichiers : seulement les 2 derniers
+    # Contexte fichiers (2 derniers seulement pour aller vite)
     if conv["fichiers_contextes"]:
         ctx = conv["fichiers_contextes"][-2:]
         contexte_text = (
-            "Voici des extraits de fichiers fournis par l’agriculteur "
-            "(tableaux, PDF, etc.). Utilise ce contexte si utile :\n\n"
+            "Voici des extraits de documents fournis par l’utilisateur "
+            "(tableaux, PDF, etc.). Utilise-les si c’est utile :\n\n"
             + "\n\n---\n\n".join(ctx)
         )
         messages.append({"role": "system", "content": contexte_text})
 
+    # 10 derniers messages
+    derniers = conv["messages"][-10:]
+    for m in derniers:
+        if m["role"] in ["user", "assistant"]:
+            messages.append({"role": m["role"], "content": m["content"]})
+
     return messages
 
 
+def appeler_modele(conv):
+    model_conf = MODEL_OPTIONS[conv["model"]]
+    messages_for_api = construire_messages(conv)
+
+    try:
+        completion = client.chat.completions.create(
+            model=model_conf["id"],
+            messages=messages_for_api,
+            temperature=model_conf["temp"],
+            max_tokens=model_conf["max_tokens"],
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        msg = str(e)
+        if "api_key" in msg.lower() or "authentication" in msg.lower():
+            return (
+                "❌ Je ne peux pas répondre car la **clé GROQ_API_KEY** n’est pas valide.\n\n"
+                "Va dans les *Secrets* Streamlit et vérifie que tu as bien :\n"
+                '`GROQ_API_KEY = "gsk_........"`'
+            )
+        return (
+            "❌ Impossible de contacter le modèle Groq pour l’instant.\n\n"
+            f"(Détail technique : {e})"
+        )
+
+
 # =========================================================
-# LAYOUT PRINCIPAL : CHAT + OUTILS (UNE SEULE PAGE)
-# =========================================================
-
-col_chat, col_tools = st.columns([2.4, 1.6])
-
-# ------------------ COLONNE GAUCHE : CHAT ------------------
-with col_chat:
-    st.title("💬 Chat IA agricole")
-
-    style_reponse = st.radio(
-        "Style de réponse :",
-        options=["Rapide et synthétique", "Un peu plus détaillée"],
-        horizontal=True,
-    )
-
-    st.markdown("---")
-
-    # Afficher l'historique
-    for msg in conv["messages"]:
-        with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
-            st.markdown(msg["content"])
-
-    # Champ de saisie
-    user_input = st.chat_input("Écris ta question ou ton problème ici…")
-
-    if user_input:
-        user_input = user_input.strip()
-        conv["messages"].append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        messages_for_api = construire_messages_pour_ia(conv, style_reponse)
-
-        # Appel modèle ultra rapide : Groq / llama-3.1-8b-instant
-        with st.chat_message("assistant"):
-            placeholder = st.empty()
-            placeholder.markdown("Je réfléchis à ta situation… ⏳")
-
-            try:
-                completion = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
-                    messages=messages_for_api,
-                    temperature=0.3,
-                    max_tokens=400,
-                )
-                answer = completion.choices[0].message.content
-            except Exception as e:
-                msg = str(e)
-                if "invalid_api_key" in msg or "authentication" in msg.lower():
-                    answer = (
-                        "❌ Je ne peux pas répondre car la **clé GROQ_API_KEY** n’est pas valide.\n\n"
-                        "➡️ Va dans les *Secrets* Streamlit et vérifie que tu as bien :\n"
-                        "`GROQ_API_KEY = \"ta_cle_groq_ici\"`.\n"
-                    )
-                else:
-                    answer = (
-                        "❌ Impossible de contacter le modèle Groq pour l’instant.\n\n"
-                        "Vérifie ta connexion internet et ta clé `GROQ_API_KEY`.\n\n"
-                        f"(Détail technique : {e})"
-                    )
-
-            placeholder.markdown(answer)
-
-        conv["messages"].append({"role": "assistant", "content": answer})
-
-    # Sauvegarde
-    st.session_state.conversations[st.session_state.current_conv_index] = conv
-
-
-# ------------------ COLONNE DROITE : OUTILS ------------------
-with col_tools:
-    st.markdown("### 📂 Fichiers & outils")
-
-    uploaded_files = st.file_uploader(
-        "Dépose ici tes PDF ou CSV (dossiers, marges, factures...).",
-        type=["csv", "pdf"],
-        accept_multiple_files=True,
-    )
-
-    if uploaded_files and st.button("✅ Analyser les fichiers"):
-        resumes = []
-        for f in uploaded_files:
-            try:
-                data = f.read()
-                if f.name.lower().endswith(".csv"):
-                    resume = lire_csv(io.BytesIO(data))
-                else:
-                    resume = lire_pdf(io.BytesIO(data))
-                resumes.append(resume)
-            except Exception as e:
-                resumes.append(f"Impossible de lire le fichier {f.name} : {e}")
-
-        conv["fichiers_contextes"].extend(resumes)
-        st.session_state.conversations[st.session_state.current_conv_index] = conv
-        st.success("Fichiers analysés. L’IA tiendra compte de ces
