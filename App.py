@@ -1,67 +1,64 @@
+# =========================================================
+# IA AGRICOLE – CHAT STYLE CHATGPT (GROQ + LLAMA 3.2)
+# Fichier : App.py
+# =========================================================
+
 import os
 import io
 import requests
 import streamlit as st
-from groq import Groq
 import pandas as pd
 import pdfplumber
+from groq import Groq
 
 # =========================================================
 # CONFIG GLOBALE
 # =========================================================
 
-APP_NAME = "💬 IA Conseiller – Chat sérieux"
-APP_VERSION = "2.0.0"
+APP_NAME = "🌾 IA agricole – Conseiller intelligent"
+APP_VERSION = "1.0.0"
 
 st.set_page_config(
     page_title=APP_NAME,
-    page_icon="💬",
-    layout="centered",  # une seule colonne, comme ChatGPT mobile
+    page_icon="🌾",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# --------- Client Groq (clé à mettre dans les secrets Streamlit : GROQ_API_KEY) ----------
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+# =========================================================
+# CLIENT GROQ (LLAMA 3.2)
+# =========================================================
+
+try:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+    client = Groq(api_key=GROQ_API_KEY)
+except Exception:
+    client = None
 
 
 # =========================================================
-# STYLE GLOBAL – sobre, propre, type ChatGPT
+# SYSTEM PROMPT DE BASE
 # =========================================================
 
-st.markdown(
-    """
-    <style>
-    html, body, [class*="css"] {
-        font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-        background-color: #ffffff;
-    }
-    .main {
-        background-color: #ffffff;
-    }
-    .block-container {
-        padding-top: 1.2rem;
-        padding-bottom: 3rem;
-        max-width: 780px;
-    }
-    .stButton>button, .stDownloadButton>button {
-        border-radius: 999px;
-        padding: 0.35rem 1.2rem;
-        font-weight: 600;
-    }
-    .app-title {
-        font-size: 1.8rem;
-        font-weight: 700;
-        margin-bottom: 0.2rem;
-    }
-    .app-subtitle {
-        color: #666;
-        font-size: 0.85rem;
-        margin-bottom: 1rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+BASE_SYSTEM_PROMPT = """
+Tu es un conseiller agricole IA francophone, calme et bienveillant.
+Tu aides les agriculteurs à :
+- mieux gérer leurs cultures, prairies, élevages (bovin, ovin, caprin, porc, volaille…),
+- comprendre leurs chiffres (produits, charges, marges, EBE…),
+- gagner du temps sur leurs papiers (factures, tableaux, relevés…),
+- réfléchir à leurs investissements avec prudence (sans jamais donner de conseil financier risqué),
+- organiser leur travail (planning, priorités, sécurité).
+
+Règles de style :
+- français simple, ton humain, comme un collègue de ferme,
+- phrases courtes, concrètes, exemples pratiques,
+- toujours respectueux, tu n’attaques jamais personne,
+- tu évites tout ce qui peut être offensant ou discriminant,
+- tu ne promets jamais de résultat financier garanti.
+
+Tu peux utiliser quelques emojis pour structurer : 🌾🐄📊💶💡⚠️✅.
+"""
+
 
 # =========================================================
 # MODES, LANGUES, MODÈLES
@@ -75,64 +72,64 @@ LANG_OPTIONS = {
 }
 
 MODEL_OPTIONS = {
-    "Groq – précis & rapide (LLaMA 3.1 70B)": {
-        "id": model="llama-3.2-90b-vision-preview",
+    "Groq – précis & rapide (LLaMA 3.2 90B)": {
+        "id": "llama-3.2-90b-vision-preview",
         "temp": 0.25,
         "max_tokens": 800,
     },
-    "Groq – léger (LLaMA 3.2 3B)": {
-        "id": "llama-3.2-3b-instruct",
+    "Groq – léger (LLaMA 3.2 11B)": {
+        "id": "llama-3.2-11b-vision-preview",
         "temp": 0.35,
         "max_tokens": 600,
     },
 }
 
-MODE_PROMPTS = {
-    "Chat général": """
-Tu es une IA de conversation sérieuse, calme, jamais offensante.
-Tu peux parler de tous les sujets, de façon claire et logique.
-Quand tu ne sais pas, tu le dis franchement.
-""",
-    "Conseiller agricole": """
-Tu es un conseiller agricole IA. Tu aides à :
-- raisonner les cultures et rotations,
-- réfléchir aux charges, marges, organisation de la ferme,
-- améliorer l'élevage (bovins, ovins, caprins, volailles) sans donner de conseils vétérinaires dangereux,
-- gagner du temps sur les papiers (tableaux, idées de factures, synthèses).
-Tu expliques comme un collègue agriculteur expérimenté, sans jugement.
-""",
-    "Gestion & compta": """
-Tu aides l'utilisateur à comprendre ses chiffres agricoles :
-produits, charges, marges, EBE, remboursement des annuités.
-Tu détailles les calculs étape par étape. Tu restes prudent :
-tu ne remplaces pas un expert-comptable.
-""",
-    "Documents & administration": """
-Tu aides à rédiger des textes sérieux : mails, lettres, comptes rendus,
-procédures, fiches de poste. Tu peux proposer des structures de tableaux ou de factures.
-Tu fais attention au ton (respectueux, neutre, professionnel).
-""",
-}
+MODE_OPTIONS = [
+    "Conseiller agricole complet",
+    "Élevage & fourrages",
+    "Compta & gestion",
+    "Organisation du travail",
+]
 
-BASE_SYSTEM_PROMPT = """
-Tu es une IA de conversation sérieuse, respectueuse, jamais offensante.
-Interdiction de produire des propos haineux, discriminants, violents
-ou illégaux. Tu refuses toute demande dangereuse.
-
-Style :
-- phrases assez courtes,
-- explications claires, structurées,
-- vocabulaire simple, adapté à un agriculteur ou à un professionnel,
-- tu raisonnes réellement avant de répondre (pas de réponses aléatoires),
-- tu expliques tes étapes de réflexion de manière résumée.
-"""
 
 # =========================================================
-# FONCTIONS OUTILS
+# STYLES VISUELS
+# =========================================================
+
+st.markdown(
+    """
+    <style>
+    html, body, [class*="css"] {
+        font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    }
+    .main {
+        background-color: #f5f7fb;
+    }
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 3rem;
+    }
+    .stChatMessage {
+        border-radius: 18px !important;
+    }
+    .stButton>button, .stDownloadButton>button {
+        border-radius: 999px;
+        padding: 0.35rem 1.2rem;
+        font-weight: 600;
+        border: 1px solid #e0e0e0;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# FONCTIONS UTILITAIRES : FICHIERS
 # =========================================================
 
 def lire_csv(file) -> str:
-    """Résumé texte d'un CSV pour donner du contexte à l'IA."""
+    """Résumé texte d'un CSV pour le contexte IA (10 lignes max)."""
     try:
         df = pd.read_csv(file)
     except Exception:
@@ -162,16 +159,16 @@ def lire_pdf(file) -> str:
 
 
 def generer_modele_facture_df():
-    """Modèle simple de facture (agricole ou autre)."""
+    """Modèle simple de facture agricole."""
     return pd.DataFrame({
         "Date": [""],
         "N° facture": [""],
         "Client": [""],
         "Adresse client": [""],
-        "SIRET / TVA client": [""],
+        "SIRET client": [""],
         "Description": [""],
         "Quantité": [0],
-        "Unité": [""],
+        "Unité": [""],  # t, kg, h, u...
         "Prix unitaire HT": [0.0],
         "TVA (%)": [20],
         "Total HT": [0.0],
@@ -181,8 +178,8 @@ def generer_modele_facture_df():
     })
 
 
-def generer_modeles_tableaux_gestion():
-    """Modèles de tableaux utiles pour une ferme."""
+def generer_tableaux_gestion():
+    """Quelques modèles de tableaux utiles (marges, trésorerie, élevage)."""
     df_marges = pd.DataFrame(columns=[
         "Année", "Atelier / Culture", "Surface_ha / Nb têtes",
         "Produit total €", "Charges opérationnelles €",
@@ -191,8 +188,9 @@ def generer_modeles_tableaux_gestion():
     ])
 
     df_tresorerie = pd.DataFrame(columns=[
-        "Date", "Type (encaissement / décaissement)", "Catégorie",
-        "Libellé", "Montant €", "Moyen de paiement", "Atelier", "Observation"
+        "Date", "Type", "Catégorie", "Libellé",
+        "Montant €", "Sens (Entrée/Sortie)",
+        "Moyen de paiement", "Atelier", "Observation"
     ])
 
     df_elevage = pd.DataFrame(columns=[
@@ -209,57 +207,61 @@ def generer_modeles_tableaux_gestion():
     }
 
 
-def get_meteo_precise(location: str, nb_villes: int = 5):
-    """
-    Météo précise via Open-Meteo :
-    - cherche plusieurs villes proches,
-    - renvoie la météo détaillée pour la première
-      + la liste des villes trouvées.
-    """
-    if not location:
-        return None, None, "Aucune localisation fournie."
+def texte_idees_schemas():
+    return (
+        "📈 **Idées de schémas simples pour organiser la ferme**\n\n"
+        "1️⃣ Rotation des cultures (parceles, successions, légumineuses…)\n"
+        "2️⃣ Organisation du travail (journalier / hebdo / saison)\n"
+        "3️⃣ Flux en bâtiment (entrées → zones → sorties, circulation des animaux)\n"
+        "4️⃣ Schéma de trésorerie sur l’année (pics de dépenses / recettes)\n\n"
+        "Tu peux les dessiner sur papier, tablette ou dans Canva / PowerPoint."
+    )
 
+
+# =========================================================
+# MÉTÉO AGRICOLE (OPEN-METEO)
+# =========================================================
+
+def get_meteo(location: str):
+    """Météo précise via Open-Meteo pour une ville donnée."""
+    if not location:
+        return None, "Aucune localisation fournie."
     try:
+        # 1) Géocodage : trouver la latitude / longitude
         geo_url = "https://geocoding-api.open-meteo.com/v1/search"
         params_geo = {
             "name": location,
-            "count": nb_villes,
+            "count": 5,            # on récupère plusieurs villes possibles
             "language": "fr",
             "format": "json",
         }
         r_geo = requests.get(geo_url, params=params_geo, timeout=8)
         if r_geo.status_code != 200:
-            return None, None, "Impossible de joindre le service de géocodage météo."
+            return None, "Impossible de joindre le service de géocodage météo."
 
         data_geo = r_geo.json()
         if "results" not in data_geo or not data_geo["results"]:
-            return None, None, f"Aucune ville trouvée pour « {location} »."
+            return None, f"Aucune localisation trouvée pour '{location}'."
 
-        villes = pd.DataFrame([{
-            "Nom": r["name"],
-            "Pays": r.get("country", ""),
-            "Lat": r["latitude"],
-            "Lon": r["longitude"],
-        } for r in data_geo["results"]])
+        lieux = data_geo["results"]
 
-        loc = data_geo["results"][0]
-        lat = loc["latitude"]
-        lon = loc["longitude"]
-        nom = loc.get("name", location)
-        pays = loc.get("country", "")
+        # 2) Pour la première ville, on récupère la météo détaillée
+        loc0 = lieux[0]
+        lat = loc0["latitude"]
+        lon = loc0["longitude"]
 
         meteo_url = "https://api.open-meteo.com/v1/forecast"
         params_met = {
             "latitude": lat,
             "longitude": lon,
-            "hourly": "temperature_2m,precipitation",
-            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
+            "hourly": "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m",
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max",
             "current_weather": "true",
             "timezone": "auto",
         }
         r_met = requests.get(meteo_url, params=params_met, timeout=8)
         if r_met.status_code != 200:
-            return None, villes, "Impossible de joindre le service météo."
+            return None, "Impossible de joindre le service météo."
 
         data_met = r_met.json()
         current = data_met.get("current_weather", {})
@@ -272,90 +274,101 @@ def get_meteo_precise(location: str, nb_villes: int = 5):
                 "T max (°C)": daily["temperature_2m_max"],
                 "T min (°C)": daily["temperature_2m_min"],
                 "Pluie jour (mm)": daily["precipitation_sum"],
+                "Vent max (km/h)": daily["wind_speed_10m_max"],
             })
         except Exception:
             pass
 
         info = {
-            "nom": nom,
-            "pays": pays,
+            "lieux": lieux,
             "current": current,
             "daily_df": df_daily,
         }
-        return info, villes, None
+        return info, None
     except Exception as e:
-        return None, None, f"Erreur météo : {e}"
+        return None, f"Erreur météo : {e}"
 
 
 # =========================================================
-# ÉTAT DE SESSION : une seule conversation principale
+# ÉTAT DE SESSION (MESSAGES + CONTEXTE FICHIERS)
 # =========================================================
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Bonjour 👋\n\nJe suis ton IA conseillère. Explique-moi ta situation ou ta question."}
-    ]
+    st.session_state.messages = []
 
 if "file_context" not in st.session_state:
-    st.session_state.file_context = []  # extraits de fichiers
+    st.session_state.file_context = []  # liste de résumés de fichiers
 
 
 # =========================================================
-# SIDEBAR : réglages globaux
+# CONSTRUCTION DES MESSAGES POUR GROQ
 # =========================================================
 
-with st.sidebar:
-    st.markdown("### ⚙️ Réglages du chat")
-    st.caption(f"Version {APP_VERSION}")
+def construire_system_prompt(mode: str, lang_code: str) -> str:
+    prompt = BASE_SYSTEM_PROMPT
 
-    langue = st.selectbox("Langue de réponse :", list(LANG_OPTIONS.keys()), index=0)
-    mode = st.selectbox("Mode :", list(MODE_PROMPTS.keys()), index=1)
-    modele_label = st.selectbox("Modèle IA :", list(MODEL_OPTIONS.keys()), index=0)
+    if mode == "Élevage & fourrages":
+        prompt += """
+Tu te concentres surtout sur l’élevage (bovin, ovin, caprin, porcs, volailles…) :
+rations, fourrages, bâtiments, reproduction, santé, organisation du travail en élevage.
+"""
+    elif mode == "Compta & gestion":
+        prompt += """
+Tu aides surtout sur la gestion économique :
+produits, charges, marges, EBE, trésorerie, annuités, investissements prudents.
+Tu ne donnes pas de conseil financier personnalisé, mais tu expliques les mécanismes.
+"""
+    elif mode == "Organisation du travail":
+        prompt += """
+Tu aides à organiser le travail :
+planning, saisonnalité, sécurité, priorités, répartition des tâches.
+"""
 
-    if st.button("🔄 Réinitialiser la discussion"):
-        st.session_state.messages = [
-            {"role": "assistant", "content": "Nouvelle discussion. Explique-moi ta situation."}
-        ]
-        st.session_state.file_context = []
-        st.experimental_rerun()
+    if lang_code != "fr":
+        prompt += f"\nTu réponds dans la langue : code '{lang_code}'.\n"
 
-    st.markdown("---")
-    st.markdown(
-        "L’IA utilise **Groq** (modèles LLaMA) : rapide et précis.\n\n"
-        "Tu peux déposer des fichiers et demander de l’aide sur les chiffres ou les papiers."
-    )
+    return prompt
 
-# =========================================================
-# FONCTION : construire messages pour l’IA
-# =========================================================
 
-def construire_messages():
-    lang_code = LANG_OPTIONS.get(langue, "fr")
-    mode_prompt = MODE_PROMPTS.get(mode, "")
+def construire_messages(mode: str, lang_code: str, style_reponse: str):
+    messages = []
 
-    messages = [
-        {"role": "system", "content": BASE_SYSTEM_PROMPT},
-        {"role": "system", "content": f"Réponds en langue : {langue} (code {lang_code})."},
-        {"role": "system", "content": mode_prompt},
-    ]
+    # system prompt
+    system_content = construire_system_prompt(mode, lang_code)
+    messages.append({"role": "system", "content": system_content})
 
+    # contexte fichiers (si présent)
     if st.session_state.file_context:
-        contexte_text = (
-            "Voici des extraits de documents fournis par l’utilisateur "
-            "(tableaux, PDF, etc.). Utilise-les si c’est utile :\n\n"
-            + "\n\n---\n\n".join(st.session_state.file_context[-3:])
-        )
-        messages.append({"role": "system", "content": contexte_text})
+        extrait = "\n\n---\n\n".join(st.session_state.file_context[-3:])
+        messages.append({
+            "role": "system",
+            "content": (
+                "Contexte issu des fichiers fournis par l’agriculteur "
+                "(tableaux, PDF, etc.) :\n\n" + extrait
+            ),
+        })
 
-    dernier_messages = st.session_state.messages[-10:]
-    for m in dernier_messages:
-        if m["role"] in ("user", "assistant"):
-            messages.append({"role": m["role"], "content": m["content"]})
+    # historique : on garde les 12 derniers messages
+    derniers = st.session_state.messages[-12:]
+    for m in derniers:
+        messages.append({"role": m["role"], "content": m["content"]})
+
+    # style court / long
+    if style_reponse == "Réponse rapide":
+        messages.append({
+            "role": "system",
+            "content": "Réponds de façon claire et assez courte (2 à 4 paragraphes max).",
+        })
+    else:
+        messages.append({
+            "role": "system",
+            "content": "Tu peux développer davantage, tout en restant simple et structuré.",
+        })
 
     return messages
 
 
-def appeler_groq():
+def appeler_groq(mode: str, lang_code: str, style_reponse: str, modele_label: str) -> str:
     if client is None:
         return (
             "❌ Je ne peux pas répondre pour l’instant.\n\n"
@@ -363,7 +376,7 @@ def appeler_groq():
         )
 
     model_conf = MODEL_OPTIONS[modele_label]
-    msgs = construire_messages()
+    msgs = construire_messages(mode, lang_code, style_reponse)
 
     try:
         completion = client.chat.completions.create(
@@ -378,57 +391,99 @@ def appeler_groq():
 
 
 # =========================================================
-# HEADER
+# BARRE LATÉRALE (PARAMÈTRES)
 # =========================================================
 
-st.markdown("<div class='app-title'>💬 IA Conseiller – Chat sérieux</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='app-subtitle'>Une seule interface pour discuter, analyser tes chiffres, t'aider sur les papiers et la météo.</div>",
-    unsafe_allow_html=True,
-)
-st.markdown("---")
+with st.sidebar:
+    st.title("🌾 IA agricole")
+    st.caption(f"Version {APP_VERSION}")
+
+    langue_label = st.selectbox("🌍 Langue de réponse", list(LANG_OPTIONS.keys()), index=0)
+    lang_code = LANG_OPTIONS[langue_label]
+
+    mode = st.radio("🎯 Mode d’aide", MODE_OPTIONS, index=0)
+
+    modele_label = st.selectbox("🧠 Modèle IA (Groq)", list(MODEL_OPTIONS.keys()), index=0)
+
+    style_reponse = st.radio(
+        "✏️ Style de réponse",
+        ["Réponse rapide", "Plus détaillée"],
+        index=0,
+    )
+
+    st.markdown("---")
+    st.markdown(
+        "💡 *Astuce : tu peux charger des fichiers (PDF, CSV) dans la colonne de droite, "
+        "je m’en servirai comme contexte pour analyser tes chiffres ou tes documents.*"
+    )
+
 
 # =========================================================
-# AFFICHAGE DE LA CONVERSATION
+# LAYOUT PRINCIPAL : CHAT + OUTILS
 # =========================================================
 
-for message in st.session_state.messages:
-    with st.chat_message("assistant" if message["role"] == "assistant" else "user"):
-        st.markdown(message["content"])
+col_chat, col_tools = st.columns([2.3, 1.7])
 
-# Champ de saisie
-user_input = st.chat_input("Écris ta question ou ta situation ici…")
+# ----------------------- COLONNE CHAT ----------------------
+with col_chat:
+    st.title("💬 Conseiller agricole IA")
 
-if user_input:
-    texte = user_input.strip()
-    if texte:
-        st.session_state.messages.append({"role": "user", "content": texte})
+    if not st.session_state.messages:
+        # message d’accueil
+        texte_bienvenue = (
+            "Salut 👋\n\n"
+            "Je suis ton **conseiller agricole IA**.\n\n"
+            "Tu peux me parler de ta ferme, de tes cultures, de ton élevage, "
+            "de ta trésorerie ou de tes papiers. On regarde ça calmement, "
+            "sans jugement, étape par étape."
+        )
+        st.session_state.messages.append({"role": "assistant", "content": texte_bienvenue})
+
+    # afficher l'historique
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # champ de saisie
+    user_input = st.chat_input("Écris ta question ou ta situation ici…")
+
+    if user_input:
+        # ajouter le message utilisateur
+        st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
-            st.markdown(texte)
+            st.markdown(user_input)
 
+        # réponse IA
         with st.chat_message("assistant"):
             placeholder = st.empty()
-            placeholder.markdown("Je réfléchis à ta situation…")
-            answer = appeler_groq()
+            placeholder.markdown("Je réfléchis à ta situation… ⏳")
+
+            answer = appeler_groq(
+                mode=mode,
+                lang_code=lang_code,
+                style_reponse=style_reponse,
+                modele_label=modele_label,
+            )
+
             placeholder.markdown(answer)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
-# =========================================================
-# OUTILS : fichiers, factures, tableaux, météo
-# =========================================================
 
-st.markdown("---")
-st.markdown("### 🧰 Outils pratiques (optionnel)")
+# ----------------------- COLONNE OUTILS --------------------
+with col_tools:
+    st.markdown("### 🧰 Outils pratiques (optionnel)")
 
-with st.expander("📂 Fichiers (PDF / CSV) à analyser", expanded=False):
+    # ---------- FICHIERS ----------
+    st.markdown("#### 📂 Fichiers (PDF / CSV)")
+
     uploaded_files = st.file_uploader(
-        "Dépose ici tes dossiers, tableaux, relevés (PDF ou CSV) :",
-        type=["pdf", "csv"],
+        "Dépose ici tes PDF ou CSV (dossiers, marges, factures, bilans…).",
+        type=["csv", "pdf"],
         accept_multiple_files=True,
     )
 
-    if uploaded_files and st.button("Analyser les fichiers"):
+    if uploaded_files and st.button("✅ Analyser les fichiers"):
         resumes = []
         for f in uploaded_files:
             try:
@@ -442,56 +497,72 @@ with st.expander("📂 Fichiers (PDF / CSV) à analyser", expanded=False):
                 resumes.append(f"Impossible de lire le fichier {f.name} : {e}")
 
         st.session_state.file_context.extend(resumes)
-        st.success("Fichiers analysés. L’IA en tiendra compte dans ses prochaines réponses.")
+        st.success("Fichiers analysés. L’IA tiendra compte de ces infos.")
         for r in resumes:
             st.code(r[:1200])
 
-with st.expander("🧾 Modèles de factures & tableaux de gestion", expanded=False):
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🧾 Modèle de facture"):
-            df_fact = generer_modele_facture_df()
-            st.dataframe(df_fact, use_container_width=True)
-            csv_fact = df_fact.to_csv(index=False).encode("utf-8")
+    st.markdown("---")
+
+    # ---------- FACTURES & TABLEAUX ----------
+    st.markdown("#### 🧾 Factures & tableaux de gestion")
+
+    if st.button("🧾 Générer un modèle de facture"):
+        df_fact = generer_modele_facture_df()
+        st.markdown("Modèle de facture agricole :")
+        st.dataframe(df_fact, use_container_width=True)
+        csv_fact = df_fact.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "📥 Télécharger `modele_facture_agricole.csv`",
+            data=csv_fact,
+            file_name="modele_facture_agricole.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    if st.button("📊 Générer des tableaux de gestion"):
+        modeles = generer_tableaux_gestion()
+        for nom, df_mod in modeles.items():
+            st.markdown(f"**{nom}**")
+            st.dataframe(df_mod, use_container_width=True)
+            csv_mod = df_mod.to_csv(index=False).encode("utf-8")
             st.download_button(
-                "📥 Télécharger facture.csv",
-                data=csv_fact,
-                file_name="modele_facture.csv",
+                f"📥 Télécharger `{nom}.csv`",
+                data=csv_mod,
+                file_name=f"{nom}.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
-    with col2:
-        if st.button("📊 Modèles de tableaux de gestion"):
-            modeles = generer_modeles_tableaux_gestion()
-            for nom, df_mod in modeles.items():
-                st.markdown(f"**{nom}**")
-                st.dataframe(df_mod, use_container_width=True)
-                csv_mod = df_mod.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    f"📥 Télécharger {nom}.csv",
-                    data=csv_mod,
-                    file_name=f"{nom}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
 
-with st.expander("🌦️ Météo très précise (plusieurs villes)", expanded=False):
-    loc = st.text_input("Ville / commune :", placeholder="Ex : Lisieux, Alençon, Limoges…")
-    if st.button("Voir la météo"):
-        info, villes_df, err = get_meteo_precise(loc)
-        if err:
-            st.error(err)
-        else:
-            if villes_df is not None and not villes_df.empty:
-                st.markdown("**Villes trouvées :**")
-                st.dataframe(villes_df, use_container_width=True)
+    if st.button("📈 Idées de schémas pour la ferme"):
+        st.markdown(texte_idees_schemas())
 
-            if info is None:
-                st.error("Impossible de récupérer la météo détaillée.")
+    st.markdown("---")
+
+    # ---------- METEO ----------
+    with st.expander("🌦️ Météo agricole détaillée", expanded=False):
+        loc = st.text_input("Ville / commune", placeholder="Ex : Lisieux, Limoges, Alençon…")
+        if st.button("Voir la météo", key="btn_meteo"):
+            info, err = get_meteo(loc)
+            if err:
+                st.error(err)
+            elif not info:
+                st.error("Impossible de récupérer la météo.")
             else:
-                st.success(f"Météo pour {info['nom']} ({info['pays']})")
+                lieux = info["lieux"]
+                st.markdown("**Villes trouvées :**")
+                villes_data = []
+                for l in lieux:
+                    villes_data.append({
+                        "Nom": l.get("name", ""),
+                        "Pays": l.get("country", ""),
+                        "Lat": l.get("latitude", ""),
+                        "Lon": l.get("longitude", ""),
+                    })
+                st.dataframe(pd.DataFrame(villes_data), use_container_width=True)
+
                 current = info.get("current", {})
                 if current:
+                    st.markdown("**Conditions actuelles (ville principale)**")
                     c1, c2, c3 = st.columns(3)
                     with c1:
                         st.metric("Température (°C)", current.get("temperature", "NA"))
@@ -502,9 +573,11 @@ with st.expander("🌦️ Météo très précise (plusieurs villes)", expanded=F
 
                 df_daily = info.get("daily_df")
                 if df_daily is not None:
-                    st.markdown("**Prévisions 5 jours :**")
+                    st.markdown("**Prévisions sur 5 jours (ville principale)**")
                     st.dataframe(df_daily.head(5), use_container_width=True)
-                    st.caption(
-                        "Source : Open-Meteo. Pour les décisions sensibles "
-                        "(récolte, traitements), croise avec une appli météo locale."
-                    )
+
+                st.caption(
+                    "💡 Météo issue d’Open-Meteo. Pour les décisions sensibles "
+                    "(récolte, traitements…), croise toujours avec ta station météo locale "
+                    "ou une appli dédiée."
+                )
